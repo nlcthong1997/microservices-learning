@@ -84,19 +84,34 @@ async function startSagaRollbackConsumer() {
 }
 
 
-// --- KHỞI ĐỘNG SERVER ---
-app.listen(PORT, async () => {
-    logger.info({ trace_id: 'SYSTEM', message: `Inventory Service (Modular) chạy tại cổng ${PORT}` });
-    
-    // Đợi kết nối hạ tầng OK
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', service: 'inventory-service', port: PORT });
+});
+
+// Fix startup bug — xem giải thích chi tiết trong order-service/server.js
+async function start() {
     try {
+        logger.info({ trace_id: 'SYSTEM', message: 'Đang kết nối RabbitMQ...' });
+
         await connectRabbit();
-        // Bật các Consumer lên lắng nghe ngầm
         await startOrderCreatedConsumer();
         await startSagaRollbackConsumer();
-        logger.info({ trace_id: 'SYSTEM', message: 'Hạ tầng RabbitMQ sẵn sàng.' });
+
+        app.listen(PORT, () => {
+            logger.info({
+                trace_id: 'SYSTEM',
+                message: `Inventory Service sẵn sàng tại cổng ${PORT} ✅`
+            });
+        });
+
     } catch (error) {
-        logger.error({ trace_id: 'SYSTEM', message: 'Lỗi khởi tạo RabbitMQ. Server dừng.' });
+        logger.error({
+            trace_id: 'SYSTEM',
+            message: `Không thể khởi động: ${error.message}`
+        });
         process.exit(1);
     }
-});
+}
+
+start();

@@ -1,34 +1,62 @@
 // order-service/server.js
 const express = require('express');
-const logger = require('./config/logger'); // Import từ config mới
-
-// Import hạ tầng config
+const logger = require('./config/logger');
 const { connectRabbit } = require('./config/rabbit');
 const { connectKafka } = require('./config/kafka');
-
-// Import route file mới
 const orderRoutes = require('./routes/orderRoutes');
 
 const app = express();
 const PORT = 3001;
 
 app.use(express.json());
-
-// --- MOUNT ROUTES ---
-// Mọi route trong file orderRoutes.js sẽ bắt đầu bằng /orders
 app.use('/orders', orderRoutes);
 
-// --- KHỞI ĐỘNG SERVER ---
-app.listen(PORT, async () => {
-    logger.info({ trace_id: 'SYSTEM', message: `Order Service (Modular) chạy tại cổng ${PORT}` });
-    
-    // Đợi kết nối hạ tầng OK thì mới bắt đầu nhận request (best practice)
+// Health check — dùng để kiểm tra service còn sống không
+// Kubernetes, load balancer, và các service khác gọi endpoint này
+// để biết có nên gửi traffic vào không
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', service: 'order-service', port: PORT });
+});
+
+// ============================================================
+// GIAI ĐOẠN 1 — Fix startup bug
+// ============================================================
+//
+// BUG trong code cũ:
+//   app.listen(PORT, async () => {
+//       await connectRabbit();  // ← chạy SAU KHI server đã nhận request
+//   })
+//
+// Vấn đề:
+//   app.listen() bắt đầu nhận TCP connection NGAY LẬP TỨC
+//   Callback async chỉ chạy SAU KHI server đã lắng nghe
+//   → Nếu request đến trong 1-2 giây đầu khi RabbitMQ chưa connect
+//   → getRabbitChannel() trả về undefined → publish lỗi → mất message
+//
+// Fix: kết nối hạ tầng TRƯỚC, chỉ mở cổng KHI mọi thứ sẵn sàng
+
+async function start() {
     try {
+        logger.info({ trace_id: 'SYSTEM', message: 'Đang kết nối hạ tầng...' });
+
         await connectRabbit();
         await connectKafka();
-        logger.info({ trace_id: 'SYSTEM', message: 'Hạ tầng OK. Sẵn sàng nhận request đặt hàng.' });
+
+        // Chỉ bắt đầu nhận request SAU KHI hạ tầng sẵn sàng
+        app.listen(PORT, () => {
+            logger.info({
+                trace_id: 'SYSTEM',
+                message: `Order Service sẵn sàng tại cổng ${PORT} ✅`
+            });
+        });
+
     } catch (error) {
-        logger.error({ trace_id: 'SYSTEM', message: 'Lỗi khởi tạo hạ tầng. Server dừng.' });
+        logger.error({
+            trace_id: 'SYSTEM',
+            message: `Không thể khởi động: ${error.message}`
+        });
         process.exit(1);
     }
-});
+}
+
+start();
