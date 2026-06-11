@@ -23,7 +23,7 @@ router.post('/sync', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[Sync] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[Sync] Order received: ${productId} x${quantity}` });
 
     try {
         const stockResponse = await axios_plain_for_comparison().get(
@@ -32,14 +32,14 @@ router.post('/sync', async (req, res) => {
         );
 
         if (!stockResponse.data.available) {
-            return res.status(400).json({ message: 'Hết hàng', trace_id: traceId });
+            return res.status(400).json({ message: 'Out of stock', trace_id: traceId });
         }
 
-        res.status(200).json({ message: 'Đặt hàng thành công [sync-basic]', trace_id: traceId });
+        res.status(200).json({ message: 'Order placed successfully [sync-basic]', trace_id: traceId });
 
     } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Sync] Lỗi: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Sync] Error: ${error.message}` });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
     }
 });
 
@@ -61,7 +61,7 @@ router.post('/sync-resilient', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[Sync-Resilient] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[Sync-Resilient] Order received: ${productId} x${quantity}` });
 
     try {
         // Lớp 1 (ngoài): Circuit Breaker kiểm tra trạng thái inventory-service
@@ -79,12 +79,12 @@ router.post('/sync-resilient', async (req, res) => {
         );
 
         if (!stockResponse.data.available) {
-            logger.warn({ trace_id: traceId, message: `[Sync-Resilient] Hết hàng: ${productId}` });
-            return res.status(400).json({ message: 'Hết hàng', trace_id: traceId });
+            logger.warn({ trace_id: traceId, message: `[Sync-Resilient] Out of stock: ${productId}` });
+            return res.status(400).json({ message: 'Out of stock', trace_id: traceId });
         }
 
-        logger.info({ trace_id: traceId, message: `[Sync-Resilient] Đặt hàng thành công.` });
-        res.status(200).json({ message: 'Đặt hàng thành công', trace_id: traceId });
+        logger.info({ trace_id: traceId, message: `[Sync-Resilient] Order placed successfully.` });
+        res.status(200).json({ message: 'Order placed successfully', trace_id: traceId });
 
     } catch (error) {
         // Phân biệt loại lỗi để trả status code phù hợp
@@ -92,9 +92,9 @@ router.post('/sync-resilient', async (req, res) => {
         if (error.circuitOpen) {
             // Circuit breaker đang mở — inventory-service đang down
             // Không retry, không chờ — fail ngay với thông báo rõ ràng
-            logger.warn({ trace_id: traceId, message: `[Sync-Resilient] Circuit OPEN, từ chối request.` });
+            logger.warn({ trace_id: traceId, message: `[Sync-Resilient] Circuit OPEN, rejecting request.` });
             return res.status(503).json({
-                message: 'Dịch vụ kho tạm thời không khả dụng. Vui lòng thử lại sau.',
+                message: 'Inventory service temporarily unavailable. Please try again later.',
                 trace_id: traceId
             });
         }
@@ -102,7 +102,7 @@ router.post('/sync-resilient', async (req, res) => {
         if (error.code === 'ECONNABORTED') {
             // Timeout — inventory-service quá chậm
             return res.status(504).json({
-                message: 'Dịch vụ kho phản hồi quá chậm.',
+                message: 'Inventory service response timed out.',
                 trace_id: traceId
             });
         }
@@ -110,13 +110,13 @@ router.post('/sync-resilient', async (req, res) => {
         if (error.code === 'ECONNREFUSED') {
             // Service không chạy
             return res.status(503).json({
-                message: 'Không thể kết nối đến dịch vụ kho.',
+                message: 'Cannot connect to inventory service.',
                 trace_id: traceId
             });
         }
 
-        logger.error({ trace_id: traceId, message: `[Sync-Resilient] Lỗi: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Sync-Resilient] Error: ${error.message}` });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
     }
 });
 
@@ -133,12 +133,12 @@ router.post('/async', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[Async] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[Async] Order received: ${productId} x${quantity}` });
 
     const rabbitChannel = getRabbitChannel();
     if (!rabbitChannel) {
-        logger.error({ trace_id: traceId, message: `[Async] RabbitMQ chưa sẵn sàng.` });
-        return res.status(503).json({ message: 'Message broker chưa sẵn sàng', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Async] RabbitMQ not ready.` });
+        return res.status(503).json({ message: 'Message broker not ready', trace_id: traceId });
     }
 
     try {
@@ -151,12 +151,12 @@ router.post('/async', async (req, res) => {
             { headers: { 'x-trace-id': traceId } }
         );
 
-        logger.info({ trace_id: traceId, message: `[Async] Đã publish event lên RabbitMQ.` });
-        res.status(202).json({ message: 'Đơn hàng đang được xử lý', trace_id: traceId });
+        logger.info({ trace_id: traceId, message: `[Async] Event published to RabbitMQ.` });
+        res.status(202).json({ message: 'Order accepted, processing in background', trace_id: traceId });
 
     } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Async] Lỗi publish: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Async] Publish error: ${error.message}` });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
     }
 });
 
@@ -167,12 +167,12 @@ router.post('/stream', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[Stream] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[Stream] Event received: ${productId} x${quantity}` });
 
     const kafkaProducer = getKafkaProducer();
     if (!kafkaProducer) {
-        logger.error({ trace_id: traceId, message: `[Stream] Kafka chưa sẵn sàng.` });
-        return res.status(503).json({ message: 'Kafka chưa sẵn sàng', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Stream] Kafka not ready.` });
+        return res.status(503).json({ message: 'Kafka not ready', trace_id: traceId });
     }
 
     try {
@@ -185,12 +185,12 @@ router.post('/stream', async (req, res) => {
             }],
         });
 
-        logger.info({ trace_id: traceId, message: `[Stream] Đã publish lên Kafka.` });
-        res.status(202).json({ message: 'Đã ghi nhận hành vi', trace_id: traceId });
+        logger.info({ trace_id: traceId, message: `[Stream] Event published to Kafka.` });
+        res.status(202).json({ message: 'Behavior tracked', trace_id: traceId });
 
     } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Stream] Lỗi: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[Stream] Error: ${error.message}` });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
     }
 });
 
@@ -236,7 +236,7 @@ router.post('/sync-grpc', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[gRPC] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[gRPC] Order received: ${productId} x${quantity}` });
 
     // Import lazy để tránh lỗi nếu gRPC chưa kết nối lúc module load
     const { checkStock } = require('../config/grpcClient');
@@ -255,7 +255,7 @@ router.post('/sync-grpc', async (req, res) => {
 
         logger.info({
             trace_id: traceId,
-            message: `[gRPC] Kết quả: ${stockResult.message}`,
+            message: `[gRPC] Result: ${stockResult.message}`,
             available: stockResult.available,
             stock: stockResult.stock,
             protocol: 'gRPC/HTTP2',  // phân biệt với REST logs
@@ -270,7 +270,7 @@ router.post('/sync-grpc', async (req, res) => {
         }
 
         res.status(200).json({
-            message: 'Đặt hàng thành công [gRPC]',
+            message: 'Order placed successfully [gRPC]',
             stock_remaining: stockResult.stock,
             trace_id: traceId,
             protocol: 'gRPC',  // cho thấy rõ đây là gRPC call
@@ -284,7 +284,7 @@ router.post('/sync-grpc', async (req, res) => {
         if (grpcStatus === 5) {
             // grpc.status.NOT_FOUND (5) → HTTP 404
             return res.status(404).json({
-                message: `Sản phẩm không tồn tại: ${productId}`,
+                message: `Product not found: ${productId}`,
                 trace_id: traceId,
             });
         }
@@ -293,13 +293,13 @@ router.post('/sync-grpc', async (req, res) => {
             // grpc.status.UNAVAILABLE (14) → HTTP 503
             // Xảy ra khi inventory-service gRPC server không chạy
             return res.status(503).json({
-                message: 'Inventory service gRPC không khả dụng',
+                message: 'Inventory service gRPC unavailable',
                 trace_id: traceId,
             });
         }
 
-        logger.error({ trace_id: traceId, message: `[gRPC] Lỗi: ${error.message}`, grpcCode: grpcStatus });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
+        logger.error({ trace_id: traceId, message: `[gRPC] Error: ${error.message}`, grpcCode: grpcStatus });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
     }
 });
 

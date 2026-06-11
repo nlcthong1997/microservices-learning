@@ -13,6 +13,13 @@ const inventoryRoutes = require('./routes/inventoryRoutes');
 // Import gRPC server
 const { startGrpcServer } = require('./config/grpcServer');
 
+// =========================================================================
+// TÊN QUEUE — khai báo 1 chỗ, dùng chung cho setup và consumer
+// =========================================================================
+const ORDER_QUEUE          = 'inventory_order_created_queue';
+const SAGA_ROLLBACK_QUEUE  = 'inventory_saga_rollback_queue';
+const DLQ                  = 'inventory_order_failed_queue';
+
 const app = express();
 const PORT = 3002;
 
@@ -30,11 +37,10 @@ app.use('/inventory', inventoryRoutes);
 // LUỒNG 2A: Consumer cho Luồng Chính (Nhận chốt đơn)
 async function startOrderCreatedConsumer() {
     const channel = getRabbitChannel();
-    const ORDER_QUEUE = 'inventory_order_created_queue';
 
     if (!channel) return;
 
-    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer 'order.created' bắt đầu lắng nghe...` });
+    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer 'order.created' is listening...` });
 
     channel.consume(ORDER_QUEUE, (msg) => {
         if (msg !== null) {
@@ -48,10 +54,10 @@ async function startOrderCreatedConsumer() {
             if (product && product.stock >= quantity) {
                 product.stock -= quantity;
                 product.reserved += quantity;
-                logger.info({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE thành công.` });
+                logger.info({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE success.` });
                 channel.ack(msg);
             } else {
-                logger.error({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE thất bại.` });
+                logger.error({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE failed - out of stock.` });
                 channel.nack(msg, false, false);
             }
         }
@@ -61,11 +67,10 @@ async function startOrderCreatedConsumer() {
 // LUỒNG 2B: Consumer cho SAGA BÙ (Nhận thanh toán fail)
 async function startSagaRollbackConsumer() {
     const channel = getRabbitChannel();
-    const SAGA_ROLLBACK_QUEUE = 'inventory_saga_rollback_queue';
 
     if (!channel) return;
 
-    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer SAGA 'payment.failed' bắt đầu lắng nghe...` });
+    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer SAGA 'payment.failed' is listening...` });
 
     channel.consume(SAGA_ROLLBACK_QUEUE, (msg) => {
         if (msg !== null) {
@@ -79,7 +84,7 @@ async function startSagaRollbackConsumer() {
             if (product) {
                 product.reserved -= quantity;
                 product.stock += quantity;
-                logger.info({ trace_id: traceId, message: `[SAGA BU] ROLLBACK thành công.` });
+                logger.info({ trace_id: traceId, message: `[SAGA] ROLLBACK success.` });
             }
             channel.ack(msg);
         }
@@ -92,14 +97,61 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'inventory-service', port: PORT });
 });
 
+// =========================================================================
+// CONSUMER CHO DEAD LETTER QUEUE
+//
+// Message vào đây khi:
+//   1. Consumer nack(msg, false, false) — hết hàng, sản phẩm không tồn tại
+//   2. Message hết TTL (nếu có cấu hình x-message-ttl trên queue)
+//
+// Trong production, consumer này sẽ:
+//   - Gửi alert (Slack, PagerDuty)
+//   - Ghi vào audit log
+//   - Retry với delay (schedule lại sau N phút)
+//   - Notify user "đơn hàng của bạn bị hủy vì hết hàng"
+//
+// Trong demo này: log cảnh báo để thấy message không bị mất
+// =========================================================================
+async function startDLQConsumer() {
+    const channel = getRabbitChannel();
+    if (!channel) return;
+
+    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: DLQ Consumer is listening on ${DLQ}...` });
+
+    channel.consume(DLQ, (msg) => {
+        if (msg !== null) {
+            const traceId = msg.properties.headers['x-trace-id'] || 'SYSTEM-DLQ';
+            const event = JSON.parse(msg.content.toString());
+
+            // x-death header do RabbitMQ tự gắn — chứa thông tin tại sao message chết
+            // VD: queue tên gì, lý do (rejected/expired), timestamp
+            const deathInfo = msg.properties.headers['x-death']?.[0];
+
+            logger.error({
+                trace_id: traceId,
+                message: `[DLQ] Message failed - routed to Dead Letter Queue`,
+                event,
+                reason: deathInfo?.reason || 'unknown',
+                original_queue: deathInfo?.queue || 'unknown',
+                death_count: deathInfo?.count || 1,
+            });
+
+            // Ack message trong DLQ — tránh nó bị loop lại
+            // (DLQ thường không có DLX tiếp theo)
+            channel.ack(msg);
+        }
+    });
+}
+
 // Fix startup bug — xem giải thích chi tiết trong order-service/server.js
 async function start() {
     try {
-        logger.info({ trace_id: 'SYSTEM', message: 'Đang kết nối RabbitMQ...' });
+        logger.info({ trace_id: 'SYSTEM', message: 'Connecting to RabbitMQ...' });
 
         await connectRabbit();
         await startOrderCreatedConsumer();
         await startSagaRollbackConsumer();
+        await startDLQConsumer();
 
         // Khởi động gRPC Server (port 50051) SONG SONG với Express (port 3002)
         // Hai server độc lập — gRPC phục vụ các service nội bộ (binary, nhanh)
@@ -109,14 +161,14 @@ async function start() {
         app.listen(PORT, () => {
             logger.info({
                 trace_id: 'SYSTEM',
-                message: `Inventory Service sẵn sàng tại cổng ${PORT} ✅`
+                message: `Inventory Service ready on port ${PORT}`
             });
         });
 
     } catch (error) {
         logger.error({
             trace_id: 'SYSTEM',
-            message: `Không thể khởi động: ${error.message}`
+            message: `Failed to start: ${error.message}`
         });
         process.exit(1);
     }

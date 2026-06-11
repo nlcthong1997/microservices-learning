@@ -37,7 +37,7 @@ app.get('/health', (req, res) => {
 
 async function start() {
     try {
-        logger.info({ trace_id: 'SYSTEM', message: 'Đang kết nối hạ tầng...' });
+        logger.info({ trace_id: 'SYSTEM', message: 'Connecting to infrastructure...' });
 
         await connectRabbit();
         await connectKafka();
@@ -46,14 +46,14 @@ async function start() {
         app.listen(PORT, () => {
             logger.info({
                 trace_id: 'SYSTEM',
-                message: `Order Service sẵn sàng tại cổng ${PORT} ✅`
+                message: `Order Service ready on port ${PORT}`
             });
         });
 
     } catch (error) {
         logger.error({
             trace_id: 'SYSTEM',
-            message: `Không thể khởi động: ${error.message}`
+            message: `Failed to start: ${error.message}`
         });
         process.exit(1);
     }

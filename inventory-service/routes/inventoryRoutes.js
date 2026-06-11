@@ -44,15 +44,15 @@ router.get('/:productId', (req, res) => {
     //   curl http://localhost:3001/orders/circuit-status
 
     if (productId === 'TRIGGER-SLOW') {
-        logger.warn({ trace_id: traceId, message: '[TEST] Giả lập slow response 5 giây...' });
+        logger.warn({ trace_id: traceId, message: '[TEST] Simulating slow response (5s)...' });
         return setTimeout(() => {
-            res.json({ productId, available: true, note: 'slow response' });
+            res.json({ productId, available: true, note: 'slow response simulated' });
         }, 5000);
     }
 
     if (productId === 'TRIGGER-ERROR') {
-        logger.error({ trace_id: traceId, message: '[TEST] Giả lập lỗi 500.' });
-        return res.status(500).json({ message: 'Internal Server Error (giả lập để test)' });
+        logger.error({ trace_id: traceId, message: '[TEST] Simulating 500 error.' });
+        return res.status(500).json({ message: 'Internal Server Error (simulated for testing)' });
     }
     // =========================================================
     // END TEST SCENARIOS
@@ -60,20 +60,20 @@ router.get('/:productId', (req, res) => {
 
     logger.info({
         trace_id: traceId,
-        message: `[HTTP Sync] Nhận yêu cầu check kho: ${productId}.`
+        message: `[HTTP Sync] Check stock request: ${productId}.`
     });
 
     const result = checkStock(productId, 1);
 
     if (!result.found) {
-        logger.warn({ trace_id: traceId, message: `[HTTP Sync] Sản phẩm ${productId} không tồn tại.` });
+        logger.warn({ trace_id: traceId, message: `[HTTP Sync] Product ${productId} not found.` });
         return res.status(404).json({ productId, available: false });
     }
 
     if (result.available) {
-        logger.info({ trace_id: traceId, message: `[HTTP Sync] ${productId} còn hàng (stock: ${result.stock}).` });
+        logger.info({ trace_id: traceId, message: `[HTTP Sync] ${productId} in stock (available: ${result.stock}).` });
     } else {
-        logger.warn({ trace_id: traceId, message: `[HTTP Sync] ${productId} HẾT HÀNG.` });
+        logger.warn({ trace_id: traceId, message: `[HTTP Sync] ${productId} OUT OF STOCK.` });
     }
 
     res.json({ productId, available: result.available, stock: result.stock });

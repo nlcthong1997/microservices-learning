@@ -11,10 +11,10 @@ async function connectKafka() {
         producer = kafka.producer();
         await producer.connect();
         
-        logger.info({ trace_id: 'SYSTEM', message: 'Hạ tầng Kafka sẵn sàng (config).' });
+        logger.info({ trace_id: 'SYSTEM', message: 'Kafka infrastructure ready (order config).' });
         return producer;
     } catch (error) {
-        logger.error({ trace_id: 'SYSTEM', message: `Lỗi kết nối Kafka: ${error.message}` });
+        logger.error({ trace_id: 'SYSTEM', message: `Kafka connection error: ${error.message}` });
         throw error;
     }
 }

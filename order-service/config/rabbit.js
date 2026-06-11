@@ -13,10 +13,10 @@ async function connectRabbit() {
         // Định nghĩa Exchange kiểu Fanout
         await channel.assertExchange('order_events', 'fanout', { durable: false });
         
-        logger.info({ trace_id: 'SYSTEM', message: 'Hạ tầng RabbitMQ sẵn sàng (config).' });
+        logger.info({ trace_id: 'SYSTEM', message: 'RabbitMQ infrastructure ready (order config).' });
         return channel;
     } catch (error) {
-        logger.error({ trace_id: 'SYSTEM', message: `Lỗi kết nối RabbitMQ: ${error.message}` });
+        logger.error({ trace_id: 'SYSTEM', message: `RabbitMQ connection error: ${error.message}` });
         throw error; // Quăng lỗi để file main biết
     }
 }
