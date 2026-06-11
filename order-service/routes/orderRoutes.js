@@ -200,112 +200,105 @@ function axios_plain_for_comparison() {
     return require('axios');
 }
 
-module.exports = router;
-
 // =========================================================================
-// GIAI ĐOẠN 1 — HTTP SYNC
-// Gọi thẳng sang inventory-service, chờ trả lời, rồi mới response về client.
-// Dùng khi: cần biết kết quả ngay, đơn giản, ít service.
+// GIAI ĐOẠN 4 — gRPC SYNC
+//
+// Tại sao gRPC khác REST?
+//
+//   REST (/sync):
+//     - Gửi: HTTP/1.1 text  "GET /inventory/IPHONE-15"
+//     - Nhận: JSON string   '{"available":true,"stock":10}'
+//     - Phải parse JSON string → object mỗi lần
+//     - Không biết trước response có fields gì (phải đọc docs)
+//
+//   gRPC (/sync-grpc):
+//     - Gửi: HTTP/2 binary  <protobuf bytes>
+//     - Nhận: object JS     { available: true, stock: 10, message: '...' }
+//     - Proto-loader tự xử lý serialize/deserialize
+//     - IDE biết chính xác type của từng field ngay lúc viết code
+//
+// Khi nào dùng gRPC?
+//   ✅ Service-to-service internal calls (không cần browser đọc được)
+//   ✅ Cần type safety giữa các team khác nhau
+//   ✅ High-throughput, low-latency (binary nhỏ hơn JSON ~3-5x)
+//   ✅ Streaming bi-directional (gRPC streaming — REST không làm được)
+//
+// Khi nào KHÔNG dùng gRPC?
+//   ❌ Public API (browser không hỗ trợ gRPC trực tiếp)
+//   ❌ Cần human-readable request/response (debug dễ)
+//   ❌ Team chưa quen với Protobuf
+//
+// Test: curl -X POST http://localhost:3001/orders/sync-grpc \
+//         -H "Content-Type: application/json" \
+//         -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
 // =========================================================================
-router.post('/sync', async (req, res) => {
+router.post('/sync-grpc', async (req, res) => {
     const traceId = randomUUID();
     const { productId, quantity } = req.body;
 
-    logger.info({ trace_id: traceId, message: `[Sync] Nhận đặt hàng: ${productId} x${quantity}` });
+    logger.info({ trace_id: traceId, message: `[gRPC] Nhận đặt hàng: ${productId} x${quantity}` });
+
+    // Import lazy để tránh lỗi nếu gRPC chưa kết nối lúc module load
+    const { checkStock } = require('../config/grpcClient');
 
     try {
-        // Gọi HTTP sang inventory-service — chờ kết quả ở đây (blocking)
-        const stockResponse = await axios.get(`${INVENTORY_SERVICE_URL}/inventory/${productId}`, {
-            headers: { 'x-trace-id': traceId }
+        // Gọi gRPC — cú pháp giống gọi function thường
+        // Nhưng thực ra đang gọi qua mạng tới inventory-service:50051
+        //
+        // So sánh với REST:
+        //   REST:  axios.get(`/inventory/${productId}`)  → stockResponse.data.available
+        //   gRPC:  checkStock({ product_id, quantity })  → stockResult.available
+        const stockResult = await checkStock({
+            product_id: productId,
+            quantity: quantity || 1,
         });
 
-        if (!stockResponse.data.available) {
-            logger.warn({ trace_id: traceId, message: `[Sync] Hết hàng: ${productId}` });
-            return res.status(400).json({ message: 'Hết hàng', trace_id: traceId });
+        logger.info({
+            trace_id: traceId,
+            message: `[gRPC] Kết quả: ${stockResult.message}`,
+            available: stockResult.available,
+            stock: stockResult.stock,
+            protocol: 'gRPC/HTTP2',  // phân biệt với REST logs
+        });
+
+        if (!stockResult.available) {
+            return res.status(400).json({
+                message: stockResult.message,
+                trace_id: traceId,
+                protocol: 'gRPC',
+            });
         }
 
-        logger.info({ trace_id: traceId, message: `[Sync] Còn hàng, đặt thành công.` });
-        res.status(200).json({ message: 'Đặt hàng thành công', trace_id: traceId });
-
-    } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Sync] Lỗi: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
-    }
-});
-
-// =========================================================================
-// GIAI ĐOẠN 2 — RABBITMQ ASYNC
-// Ném event vào RabbitMQ rồi trả 202 ngay, không chờ inventory xử lý xong.
-// inventory-service đang lắng nghe ngầm, tự nhận và trừ kho.
-// Dùng khi: không cần kết quả ngay, muốn tách biệt service, chịu tải tốt hơn.
-// =========================================================================
-router.post('/async', async (req, res) => {
-    const traceId = randomUUID();
-    const { productId, quantity } = req.body;
-
-    logger.info({ trace_id: traceId, message: `[Async] Nhận đặt hàng: ${productId} x${quantity}` });
-
-    const rabbitChannel = getRabbitChannel();
-    if (!rabbitChannel) {
-        logger.error({ trace_id: traceId, message: `[Async] RabbitMQ chưa sẵn sàng.` });
-        return res.status(503).json({ message: 'Message broker chưa sẵn sàng', trace_id: traceId });
-    }
-
-    try {
-        const event = { productId, quantity, traceId, createdAt: new Date() };
-
-        // Publish vào exchange "order_events" (fanout) — inventory-service tự nhận
-        rabbitChannel.publish(
-            'order_events',
-            '',                                      // routing key để trống vì fanout
-            Buffer.from(JSON.stringify(event)),
-            { headers: { 'x-trace-id': traceId } }
-        );
-
-        logger.info({ trace_id: traceId, message: `[Async] Đã publish event lên RabbitMQ.` });
-
-        // Trả về ngay, không đợi inventory xử lý xong
-        res.status(202).json({ message: 'Đơn hàng đang được xử lý', trace_id: traceId });
-
-    } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Async] Lỗi publish: ${error.message}` });
-        res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
-    }
-});
-
-// =========================================================================
-// GIAI ĐOẠN 3 — KAFKA STREAM
-// Publish hành vi user lên Kafka. Nhiều service khác nhau (analytics, ML,
-// audit log) có thể đọc độc lập mà không ảnh hưởng lẫn nhau.
-// Dùng khi: cần nhiều consumer đọc cùng 1 event, cần replay lại lịch sử.
-// =========================================================================
-router.post('/stream', async (req, res) => {
-    const traceId = randomUUID();
-    const { productId, quantity } = req.body;
-
-    logger.info({ trace_id: traceId, message: `[Stream] Nhận đặt hàng: ${productId} x${quantity}` });
-
-    const kafkaProducer = getKafkaProducer();
-    if (!kafkaProducer) {
-        logger.error({ trace_id: traceId, message: `[Stream] Kafka chưa sẵn sàng.` });
-        return res.status(503).json({ message: 'Kafka chưa sẵn sàng', trace_id: traceId });
-    }
-
-    try {
-        await kafkaProducer.send({
-            topic: 'user-behavior-logs',
-            messages: [{
-                key: productId,   // cùng productId → cùng partition → ordering đảm bảo
-                value: JSON.stringify({ action: 'purchase', productId, quantity, traceId }),
-                headers: { 'x-trace-id': traceId }
-            }],
+        res.status(200).json({
+            message: 'Đặt hàng thành công [gRPC]',
+            stock_remaining: stockResult.stock,
+            trace_id: traceId,
+            protocol: 'gRPC',  // cho thấy rõ đây là gRPC call
         });
 
-        logger.info({ trace_id: traceId, message: `[Stream] Đã publish lên Kafka.` });
-        res.status(202).json({ message: 'Đã ghi nhận hành vi', trace_id: traceId });
-
     } catch (error) {
-        logger.error({ trace_id: traceId, message: `[Stream] Lỗi publish Kafka: ${error.message}` });
+        // gRPC errors có thêm `error.grpcCode` (set trong grpcClient.js)
+        // Chuyển gRPC status code → HTTP status code phù hợp
+        const grpcStatus = error.grpcCode;
+
+        if (grpcStatus === 5) {
+            // grpc.status.NOT_FOUND (5) → HTTP 404
+            return res.status(404).json({
+                message: `Sản phẩm không tồn tại: ${productId}`,
+                trace_id: traceId,
+            });
+        }
+
+        if (grpcStatus === 14) {
+            // grpc.status.UNAVAILABLE (14) → HTTP 503
+            // Xảy ra khi inventory-service gRPC server không chạy
+            return res.status(503).json({
+                message: 'Inventory service gRPC không khả dụng',
+                trace_id: traceId,
+            });
+        }
+
+        logger.error({ trace_id: traceId, message: `[gRPC] Lỗi: ${error.message}`, grpcCode: grpcStatus });
         res.status(500).json({ message: 'Lỗi hệ thống', trace_id: traceId });
     }
 });

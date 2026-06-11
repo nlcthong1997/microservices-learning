@@ -16,9 +16,10 @@ Dự án học microservice thực chiến — xây dựng từng giai đoạn, 
 8. [Giai đoạn 3 — RabbitMQ Async](#8-giai-đoạn-3--rabbitmq-async)
 9. [Giai đoạn 4 — Distributed Tracing & Logging](#9-giai-đoạn-4--distributed-tracing--logging)
 10. [Giai đoạn 5 — Kafka Stream](#10-giai-đoạn-5--kafka-stream)
-11. [Thuật ngữ](#11-thuật-ngữ)
-12. [Dashboard & Monitoring](#12-dashboard--monitoring)
-13. [Chạy dự án](#13-chạy-dự-án)
+11. [Giai đoạn 6 — gRPC](#11-giai-đoạn-6--grpc)
+12. [Thuật ngữ](#12-thuật-ngữ)
+13. [Dashboard & Monitoring](#13-dashboard--monitoring)
+14. [Chạy dự án & Test chi tiết](#14-chạy-dự-án--test-chi-tiết)
 
 ---
 
@@ -90,23 +91,25 @@ analytics-service → Python (nếu muốn), scale nhiều CPU
 │                                                               │
 │  POST /orders/sync           → HTTP trực tiếp (cơ bản)       │
 │  POST /orders/sync-resilient → HTTP + Timeout + Retry + CB    │
+│  POST /orders/sync-grpc      → gRPC binary call               │
 │  POST /orders/async          → Publish RabbitMQ               │
 │  POST /orders/stream         → Publish Kafka                  │
 │  GET  /orders/circuit-status → Xem trạng thái circuit breaker │
 │  GET  /health                → Health check                   │
-└──────┬──────────────────────────┬───────────────────────────┘
-       │ HTTP (sync)              │ Publish (async)
+└──────┬──────────────────────────┬──────────────┬─────────────┘
+       │ HTTP/REST (:3002)        │ Publish       │ gRPC (:50051)
        ▼                          ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌───────────────────┐
 │inventory-service│     │    RabbitMQ       │     │      Kafka         │
-│   (:3002)       │     │ Exchange: fanout  │     │ Topic: user-       │
-│                 │     │ order_events      │     │ behavior-logs      │
-│ GET /inventory/ │     │ Queue:            │     │                    │
-│    :productId   │◄────┤ inventory_order_  │     │ (analytics-service │
-│ GET /health     │     │ created_queue     │     │  consume ở đây)    │
-│                 │     │ saga_rollback_    │     │                    │
-│ TRIGGER-SLOW    │     │ queue             │     └───────────────────┘
-│ TRIGGER-ERROR   │     └──────────────────┘
+│   (:3002 REST)  │     │ Exchange: fanout  │     │ Topic: user-       │
+│   (:50051 gRPC) │     │ order_events      │     │ behavior-logs      │
+│                 │     │ Queue:            │     │                    │
+│ GET /inventory/ │◄────┤ inventory_order_  │     │ (analytics-service │
+│    :productId   │     │ created_queue     │     │  consume ở đây)    │
+│ GET /health     │     │ saga_rollback_    │     │                    │
+│ CheckStock(gRPC)│◄────┘ queue             │     └───────────────────┘
+│ TRIGGER-SLOW    │     └──────────────────┘
+│ TRIGGER-ERROR   │
 └─────────────────┘
 
 Observability:
@@ -140,6 +143,9 @@ microservice-learning-2026/
 ├── loki-config.yaml            ← Cấu hình Loki log storage
 ├── .gitignore
 │
+├── proto/
+│   └── inventory.proto         ← "Hợp đồng" gRPC: định nghĩa service, message [GĐ6]
+│
 ├── docs/
 │   ├── rabbitmq.md             ← Hướng dẫn toàn diện RabbitMQ
 │   └── kafka.md                ← Hướng dẫn toàn diện Kafka
@@ -152,23 +158,40 @@ microservice-learning-2026/
 │   │   ├── rabbit.js           ← Kết nối RabbitMQ, tạo exchange
 │   │   ├── kafka.js            ← Kết nối Kafka producer
 │   │   ├── httpClient.js       ← Axios với timeout + retry logic    [GĐ2]
-│   │   └── circuitBreaker.js   ← Circuit breaker pattern            [GĐ2]
+│   │   ├── circuitBreaker.js   ← Circuit breaker pattern            [GĐ2]
+│   │   └── grpcClient.js       ← gRPC stub kết nối inventory:50051  [GĐ6]
 │   └── routes/
 │       └── orderRoutes.js      ← Tất cả route /orders/*
 │
 └── inventory-service/          ← Service quản lý kho hàng
-    ├── server.js               ← Điểm khởi động + RabbitMQ consumers
+    ├── server.js               ← Điểm khởi động + RabbitMQ consumers + gRPC
     ├── package.json
     ├── config/
     │   ├── logger.js           ← Winston logger → Loki
-    │   └── rabbit.js           ← Kết nối RabbitMQ, setup queue/binding
+    │   ├── rabbit.js           ← Kết nối RabbitMQ, setup queue/binding
+    │   └── grpcServer.js       ← gRPC server trên port 50051         [GĐ6]
     ├── models/
     │   └── inventory.js        ← Dữ liệu kho giả (thay cho database)
+    ├── services/
+    │   └── inventoryService.js ← Business logic: checkStock() — dùng chung [GĐ6]
     └── routes/
         └── inventoryRoutes.js  ← Route /inventory/:productId + test triggers
 ```
 
-`[GĐ2]` — được thêm ở Giai đoạn 2. Mỗi giai đoạn thêm một lớp phức tạp có lý do rõ ràng, không phải thêm cho có.
+`[GĐ2]` — Giai đoạn 2. `[GĐ6]` — Giai đoạn 6 (gRPC). Mỗi giai đoạn thêm một lớp phức tạp có lý do rõ ràng.
+
+### Tại sao có `services/` layer?
+
+Khi thêm gRPC, logic check kho bị viết lại ở 2 chỗ — và **không nhất quán** (REST bỏ qua `reserved`, gRPC tính đúng). Service layer giải quyết điều này:
+
+```
+inventoryService.js  ← business logic: 1 nguồn sự thật
+       │
+       ├── inventoryRoutes.js  (REST :3002)  → gọi checkStock()
+       └── grpcServer.js       (gRPC :50051) → gọi checkStock()
+```
+
+**Nguyên tắc:** Route/Controller chỉ lo HTTP/gRPC — không chứa business logic.
 
 ---
 
@@ -559,7 +582,104 @@ Kafka ghi lại **hành vi user** cho analytics — nhiều service khác nhau c
 
 ---
 
-## 11. Thuật ngữ
+## 11. Giai đoạn 6 — gRPC
+
+### Mục tiêu học
+
+Hiểu giao thức gRPC — tại sao nó tồn tại cạnh REST, khi nào dùng cái nào.
+
+### Route
+
+```bash
+POST /orders/sync-grpc
+{"productId": "IPHONE-15", "quantity": 1}
+```
+
+### REST vs gRPC — so sánh thực tế
+
+```
+REST (/orders/sync):
+  Gửi:  HTTP/1.1  →  "GET /inventory/IPHONE-15"  (text)
+  Nhận: HTTP/1.1  ←  '{"available":true,"stock":10}'  (JSON string)
+  Xử lý: phải JSON.parse() thủ công, không biết type
+
+gRPC (/orders/sync-grpc):
+  Gửi:  HTTP/2  →  <protobuf binary>  (~10 bytes)
+  Nhận: HTTP/2  ←  { available: true, stock: 10, message: '...' }  (object JS, đã typed)
+  Xử lý: framework tự serialize/deserialize
+```
+
+### Cơ chế hoạt động
+
+**Bước 1** — File `.proto` là nguồn sự thật duy nhất:
+```protobuf
+// proto/inventory.proto
+service InventoryService {
+  rpc CheckStock (CheckStockRequest) returns (CheckStockResponse);
+}
+```
+
+**Bước 2** — inventory-service đăng ký implementation:
+```javascript
+// inventory-service/config/grpcServer.js — port 50051
+server.addService(inventoryProto.InventoryService.service, {
+  checkStock,  // key phải khớp tên trong .proto (camelCase)
+});
+```
+
+**Bước 3** — order-service gọi như gọi function thường:
+```javascript
+// order-service/config/grpcClient.js
+const result = await checkStock({ product_id: 'IPHONE-15', quantity: 1 });
+// result.available, result.stock, result.message — typed ngay
+```
+
+Framework tự generate HTTP/2 path `/inventory.InventoryService/CheckStock` — bạn không viết thủ công.
+
+### Tại sao inventory-service có 2 server?
+
+```
+inventory-service:
+  ├── Express  (:3002)  — REST API, dùng HTTP/1.1, cho browser/curl/Postman
+  └── gRPC     (:50051) — gRPC API, dùng HTTP/2, cho các service nội bộ gọi nhau
+```
+
+Hai protocol khác nhau hoàn toàn → cần hai server riêng chạy song song.
+
+### Khi nào dùng gRPC?
+
+| Dùng gRPC | Không dùng gRPC |
+|---|---|
+| Service-to-service nội bộ | Public API (browser không hỗ trợ gRPC trực tiếp) |
+| Cần type safety giữa nhiều team | Cần human-readable để debug dễ |
+| High-throughput, low-latency | Team chưa quen Protobuf |
+| Bi-directional streaming | |
+
+### Test
+
+```bash
+# Còn hàng — thấy protocol: "gRPC" trong response
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# Kỳ vọng: {"message":"Đặt hàng thành công [gRPC]","stock_remaining":10,"protocol":"gRPC",...}
+
+# Hết hàng
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":999}"
+# Kỳ vọng: 400 {"message":"Hết hàng (chỉ còn 10, yêu cầu 999)",...}
+
+# Sản phẩm không tồn tại
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"INVALID-SKU\",\"quantity\":1}"
+# Kỳ vọng: 404 {"message":"Sản phẩm không tồn tại: INVALID-SKU",...}
+```
+
+---
+
+## 12. Thuật ngữ
 
 | Thuật ngữ | Định nghĩa |
 |---|---|
@@ -596,9 +716,15 @@ Kafka ghi lại **hành vi user** cho analytics — nhiều service khác nhau c
 | **Consumer Group** | Nhóm consumer Kafka cùng groupId |
 | **Retention** | Thời gian Kafka giữ message trước khi xóa |
 
+| **gRPC** | Remote Procedure Call — gọi hàm của service khác như gọi hàm local, dùng HTTP/2 + Protobuf |
+| **Protobuf** | Protocol Buffers — định dạng binary của Google, nhỏ và nhanh hơn JSON |
+| **.proto file** | File định nghĩa "hợp đồng" gRPC: service, RPC methods, message types |
+| **Stub** | Đại diện của remote service trên local — gọi stub như gọi object local |
+| **gRPC Channel** | Kết nối HTTP/2 tới gRPC server, tái sử dụng (không tạo mới mỗi request) |
+
 ---
 
-## 12. Dashboard & Monitoring
+## 13. Dashboard & Monitoring
 
 ### RabbitMQ Management UI — http://localhost:15672 (guest/guest)
 
@@ -623,20 +749,38 @@ done
 
 ### Grafana + Loki — http://localhost:3000 (admin/admin)
 
+**Cấu hình Data Source lần đầu:**
+1. Vào **Connections → Data sources → Add data source**
+2. Chọn **Loki**
+3. URL: `http://loki:3100` (tên service trong Docker network)
+4. Click **Save & Test**
+
+**Query log theo traceId:**
 ```bash
-# Test distributed tracing
+# Gọi API và lấy traceId từ response
 RESPONSE=$(curl -s -X POST http://localhost:3001/orders/async \
   -H "Content-Type: application/json" \
   -d '{"productId":"IPHONE-15","quantity":1}')
 
 TRACE_ID=$(echo $RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['trace_id'])")
-echo "Query Grafana với: $TRACE_ID"
-# LogQL: {app=~"order-service|inventory-service"} |= "$TRACE_ID"
+echo "TraceId: $TRACE_ID"
+```
+
+Vào **Explore → Loki** và dùng LogQL:
+```
+# Toàn bộ log của 1 request xuyên cả 2 service
+{app=~"order-service|inventory-service"} |= "<trace_id_ở_đây>"
+
+# Chỉ xem error logs
+{app="order-service"} | json | level="error"
+
+# Xem log của 5 phút gần nhất
+{app="inventory-service"} | json
 ```
 
 ---
 
-## 13. Chạy dự án
+## 14. Chạy dự án & Test chi tiết
 
 ### Yêu cầu
 
@@ -646,34 +790,203 @@ echo "Query Grafana với: $TRACE_ID"
 ### Khởi động
 
 ```bash
-# Bước 1: Hạ tầng
+# Terminal 1: Hạ tầng (RabbitMQ, Kafka, Loki, Grafana)
 docker compose up -d
 
-# Bước 2: Inventory Service (chạy trước)
+# Chờ ~10 giây cho RabbitMQ và Kafka sẵn sàng, rồi:
+
+# Terminal 2: Inventory Service
 cd inventory-service && npm install && node server.js
+# Kỳ vọng thấy:
+# ✅ "Kết nối RabbitMQ thành công"
+# ✅ "gRPC Server đang lắng nghe" { port: 50051 }
+# ✅ "Inventory Service sẵn sàng tại cổng 3002"
 
-# Bước 3: Order Service (terminal khác)
+# Terminal 3: Order Service
 cd order-service && npm install && node server.js
-```
-
-### Verify
-
-```bash
-curl http://localhost:3001/health
-curl http://localhost:3002/health
+# Kỳ vọng thấy:
+# ✅ "Kết nối RabbitMQ thành công"
+# ✅ "Kết nối Kafka thành công"
+# ✅ "Order Service sẵn sàng tại cổng 3001"
 ```
 
 ### Sản phẩm trong kho giả
 
-| productId | Stock |
-|---|---|
-| `IPHONE-15` | 10 |
-| `MACBOOK-M3` | 5 |
-| `LAPTOP-MODULAR-TEST` | 100 |
-
-### Test triggers
-
-| productId | Hành vi | Mục đích test |
+| productId | Stock ban đầu | Ghi chú |
 |---|---|---|
-| `TRIGGER-SLOW` | Trả response sau 5 giây | Timeout (kỳ vọng 504) |
-| `TRIGGER-ERROR` | Luôn trả 500 | Retry + Circuit Breaker |
+| `IPHONE-15` | 10 | Sản phẩm test chính |
+| `MACBOOK-M3` | 5 | Test hết hàng |
+| `LAPTOP-MODULAR-TEST` | 100 | Test async bulk |
+| `TRIGGER-SLOW` | — | Delay 5 giây → test timeout |
+| `TRIGGER-ERROR` | — | Luôn trả 500 → test retry/circuit breaker |
+
+---
+
+### Test 1 — Verify services đang chạy
+
+```bash
+curl http://localhost:3001/health
+# Kỳ vọng: {"status":"ok","service":"order-service","port":3001}
+
+curl http://localhost:3002/health
+# Kỳ vọng: {"status":"ok","service":"inventory-service","port":3002}
+
+curl http://localhost:3002/inventory/IPHONE-15
+# Kỳ vọng: {"productId":"IPHONE-15","available":true,"stock":10}
+```
+
+---
+
+### Test 2 — Giai đoạn 1: HTTP Sync cơ bản
+
+```bash
+# Còn hàng
+curl -X POST http://localhost:3001/orders/sync \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# Kỳ vọng: 200 {"message":"Đặt hàng thành công [sync-basic]",...}
+
+# Hết hàng
+curl -X POST http://localhost:3001/orders/sync \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":999}"
+# Kỳ vọng: 400 {"message":"Hết hàng",...}
+```
+
+---
+
+### Test 3 — Giai đoạn 2: Timeout
+
+```bash
+# Gọi TRIGGER-SLOW — inventory mất 5 giây, order-service timeout sau 3 giây
+curl -X POST http://localhost:3001/orders/sync-resilient \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"TRIGGER-SLOW\",\"quantity\":1}"
+# Kỳ vọng: sau ~9 giây (3s × 3 lần retry) trả 504
+# {"message":"Dịch vụ kho phản hồi quá chậm.",...}
+```
+
+> **Tại sao mất 9 giây?** Mỗi lần retry timeout sau 3 giây, retry 3 lần → 3×3 = 9 giây. Sau 9 giây mới trả lỗi về.
+
+---
+
+### Test 4 — Giai đoạn 2: Retry + Circuit Breaker
+
+Chạy 4 lần liên tiếp, quan sát thời gian phản hồi thay đổi:
+
+```bash
+# Lần 1-3: retry → mỗi lần mất ~9 giây (chậm)
+curl -w "\nHTTP %{http_code} - Thời gian: %{time_total}s\n" \
+  -X POST http://localhost:3001/orders/sync-resilient \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"TRIGGER-ERROR\",\"quantity\":1}"
+```
+
+Sau **lần thứ 3**, circuit chuyển sang **OPEN**:
+```bash
+# Lần 4: circuit OPEN → fail ngay < 100ms (nhanh!)
+curl -w "\nHTTP %{http_code} - Thời gian: %{time_total}s\n" \
+  -X POST http://localhost:3001/orders/sync-resilient \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"TRIGGER-ERROR\",\"quantity\":1}"
+# Kỳ vọng: 503 ngay lập tức
+# {"message":"Dịch vụ kho tạm thời không khả dụng. Vui lòng thử lại sau.",...}
+```
+
+Kiểm tra trạng thái circuit:
+```bash
+curl http://localhost:3001/orders/circuit-status
+# Kỳ vọng khi OPEN:
+# {"service":"inventory-service","state":"OPEN","failureCount":3,...}
+
+# Chờ 10 giây → circuit thử HALF_OPEN → gọi lại 1 lần thành công → CLOSED
+```
+
+---
+
+### Test 5 — Giai đoạn 3: RabbitMQ Async
+
+```bash
+# Gửi đơn hàng async — trả 202 NGAY, không chờ inventory xử lý
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# Kỳ vọng: 202 NGAY LẬP TỨC (< 10ms)
+# {"message":"Đơn hàng đang được xử lý","trace_id":"..."}
+
+# Quan sát log inventory-service: sẽ thấy log trừ kho sau đó
+# "[RabbitMQ Async] RESERVE thành công"
+```
+
+Mở http://localhost:15672 (guest/guest) → **Queues** → thấy `inventory_order_created_queue` có message count tăng/giảm.
+
+---
+
+### Test 6 — Giai đoạn 5: Kafka Stream
+
+```bash
+curl -X POST http://localhost:3001/orders/stream \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# Kỳ vọng: 202 {"message":"Đã ghi nhận hành vi",...}
+```
+
+Mở http://localhost:8080 → **Topics** → `user-behavior-logs` → **Messages** → thấy message vừa publish.
+
+---
+
+### Test 7 — Giai đoạn 6: gRPC
+
+```bash
+# Còn hàng — response có thêm field "protocol":"gRPC" và "stock_remaining"
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# Kỳ vọng: 200
+# {"message":"Đặt hàng thành công [gRPC]","stock_remaining":10,"protocol":"gRPC",...}
+
+# Hết hàng
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":999}"
+# Kỳ vọng: 400
+# {"message":"Hết hàng (chỉ còn 10, yêu cầu 999)",...}
+
+# Sản phẩm không tồn tại (gRPC NOT_FOUND → HTTP 404)
+curl -X POST http://localhost:3001/orders/sync-grpc \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"INVALID-SKU\",\"quantity\":1}"
+# Kỳ vọng: 404
+# {"message":"Sản phẩm không tồn tại: INVALID-SKU",...}
+```
+
+**So sánh log giữa REST và gRPC** — quan sát terminal inventory-service:
+```
+# REST call → log từ /sync hoặc /sync-resilient:
+info: GET /inventory/IPHONE-15 200
+
+# gRPC call → log từ grpcServer.js:
+info: gRPC: Nhận yêu cầu CheckStock  { product_id: 'IPHONE-15', protocol: 'gRPC' }
+info: gRPC: Kết quả CheckStock       { available: true, stock: 10, protocol: 'gRPC/HTTP2' }
+```
+
+---
+
+### Test 8 — Distributed Tracing: theo dõi 1 request qua 2 service
+
+```bash
+# Gọi async và lấy traceId
+RESPONSE=$(curl -s -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"LAPTOP-MODULAR-TEST","quantity":1}')
+
+echo $RESPONSE
+# {"message":"Đơn hàng đang được xử lý","trace_id":"a7f3b2c1-xxxx"}
+```
+
+Dùng `trace_id` vừa lấy để query Grafana:
+```
+{app=~"order-service|inventory-service"} |= "a7f3b2c1-xxxx"
+```
+
+Bạn sẽ thấy **4 dòng log có cùng traceId** từ 2 service khác nhau — đây là distributed tracing.

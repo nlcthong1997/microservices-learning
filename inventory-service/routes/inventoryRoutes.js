@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 
 const logger = require('../config/logger');
-const mockInventory = require('../models/inventory');
+const { checkStock } = require('../services/inventoryService');
 
 // =========================================================================
 // ROUTE CHÍNH — check kho (HTTP Sync)
@@ -63,22 +63,20 @@ router.get('/:productId', (req, res) => {
         message: `[HTTP Sync] Nhận yêu cầu check kho: ${productId}.`
     });
 
-    const product = mockInventory[productId];
+    const result = checkStock(productId, 1);
 
-    if (!product) {
+    if (!result.found) {
         logger.warn({ trace_id: traceId, message: `[HTTP Sync] Sản phẩm ${productId} không tồn tại.` });
-        return res.json({ productId, available: false });
+        return res.status(404).json({ productId, available: false });
     }
 
-    const isAvailable = product.stock > 0;
-
-    if (isAvailable) {
-        logger.info({ trace_id: traceId, message: `[HTTP Sync] ${productId} còn hàng (stock: ${product.stock}).` });
+    if (result.available) {
+        logger.info({ trace_id: traceId, message: `[HTTP Sync] ${productId} còn hàng (stock: ${result.stock}).` });
     } else {
         logger.warn({ trace_id: traceId, message: `[HTTP Sync] ${productId} HẾT HÀNG.` });
     }
 
-    res.json({ productId, available: isAvailable, stock: product.stock });
+    res.json({ productId, available: result.available, stock: result.stock });
 });
 
 module.exports = router;

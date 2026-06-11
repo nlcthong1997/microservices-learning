@@ -10,6 +10,9 @@ const mockInventory = require('./models/inventory');
 // Import route file mới (TÁCH BIỆT)
 const inventoryRoutes = require('./routes/inventoryRoutes');
 
+// Import gRPC server
+const { startGrpcServer } = require('./config/grpcServer');
+
 const app = express();
 const PORT = 3002;
 
@@ -97,6 +100,11 @@ async function start() {
         await connectRabbit();
         await startOrderCreatedConsumer();
         await startSagaRollbackConsumer();
+
+        // Khởi động gRPC Server (port 50051) SONG SONG với Express (port 3002)
+        // Hai server độc lập — gRPC phục vụ các service nội bộ (binary, nhanh)
+        //                    — Express phục vụ REST API (browser, curl, Postman)
+        startGrpcServer();
 
         app.listen(PORT, () => {
             logger.info({
