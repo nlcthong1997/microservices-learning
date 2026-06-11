@@ -1,0 +1,58 @@
+// proto/inventory.proto
+//
+// ĐÂY LÀ "HỢP ĐỒNG" GIỮA HAI SERVICE
+//
+// Cả order-service và inventory-service đều phải dùng file này.
+// Nó định nghĩa chính xác:
+//   - Có những hàm (RPC) nào được phép gọi
+//   - Tham số đầu vào là gì (message request)
+//   - Kết quả trả về là gì (message response)
+//
+// Tại sao cần file .proto?
+//
+//   REST: order-service tự đặt URL, tự quyết định JSON field nào gửi đi
+//         → inventory-service có thể đổi tên field "available" thành "inStock"
+//         → order-service bị lỗi runtime, không biết trước
+//
+//   gRPC: cả hai bên đều import file .proto này
+//         → nếu inventory đổi tên field → phải sửa .proto → order-service
+//           bị lỗi ngay lúc khởi động (không phải runtime)
+//         → Contract được enforce rõ ràng
+//
+// Tại sao dùng Protobuf (binary) thay vì JSON (text)?
+//
+//   JSON:     {"productId":"IPHONE-15","quantity":1}   → 38 bytes
+//   Protobuf: <binary encoding>                        → ~10 bytes
+//
+//   Khi gọi hàng triệu request/ngày, tiết kiệm 70% bandwidth là đáng kể.
+//   Ngoài ra Protobuf serialize/deserialize nhanh hơn JSON ~5-10 lần.
+
+syntax = "proto3";
+
+package inventory;
+
+// Định nghĩa service — tương đương Express Router
+// Đây là danh sách hàm mà inventory-service expose ra ngoài
+service InventoryService {
+
+  // Hàm 1: Check kho còn hàng không
+  // Tương đương: GET /inventory/:productId trong REST
+  rpc CheckStock (CheckStockRequest) returns (CheckStockResponse);
+
+  // Hàm 2: Trừ kho (để dùng sau)
+  // rpc DeductStock (DeductStockRequest) returns (DeductStockResponse);
+}
+
+// Định nghĩa input của CheckStock
+// Mỗi field có: type, tên, và số thứ tự (dùng cho binary encoding)
+message CheckStockRequest {
+  string product_id = 1;   // VD: "IPHONE-15"
+  int32 quantity    = 2;   // VD: 1
+}
+
+// Định nghĩa output của CheckStock
+message CheckStockResponse {
+  bool   available = 1;   // true / false
+  int32  stock     = 2;   // số lượng còn lại (để hiển thị)
+  string message   = 3;   // mô tả thêm (VD: "Còn hàng", "Hết hàng")
+}
