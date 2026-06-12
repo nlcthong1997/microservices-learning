@@ -798,16 +798,18 @@ docker compose up -d
 # Terminal 2: Inventory Service
 cd inventory-service && npm install && node server.js
 # Kỳ vọng thấy:
-# ✅ "Kết nối RabbitMQ thành công"
-# ✅ "gRPC Server đang lắng nghe" { port: 50051 }
-# ✅ "Inventory Service sẵn sàng tại cổng 3002"
+# ✅ "Connecting to RabbitMQ..."
+# ✅ "RabbitMQ: DLX ready -> inventory_order_failed_queue"
+# ✅ "gRPC Server listening" { port: 50051 }
+# ✅ "Inventory Service ready on port 3002"
 
 # Terminal 3: Order Service
 cd order-service && npm install && node server.js
 # Kỳ vọng thấy:
-# ✅ "Kết nối RabbitMQ thành công"
-# ✅ "Kết nối Kafka thành công"
-# ✅ "Order Service sẵn sàng tại cổng 3001"
+# ✅ "Connecting to infrastructure..."
+# ✅ "RabbitMQ infrastructure ready"
+# ✅ "Kafka infrastructure ready"
+# ✅ "Order Service ready on port 3001"
 ```
 
 ### Sản phẩm trong kho giả
@@ -844,13 +846,13 @@ curl http://localhost:3002/inventory/IPHONE-15
 curl -X POST http://localhost:3001/orders/sync \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
-# Kỳ vọng: 200 {"message":"Đặt hàng thành công [sync-basic]",...}
+# Kỳ vọng: 200 {"message":"Order placed successfully [sync-basic]",...}
 
 # Hết hàng
 curl -X POST http://localhost:3001/orders/sync \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":999}"
-# Kỳ vọng: 400 {"message":"Hết hàng",...}
+# Kỳ vọng: 400 {"message":"Out of stock",...}
 ```
 
 ---
@@ -863,10 +865,12 @@ curl -X POST http://localhost:3001/orders/sync-resilient \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"TRIGGER-SLOW\",\"quantity\":1}"
 # Kỳ vọng: sau ~9 giây (3s × 3 lần retry) trả 504
-# {"message":"Dịch vụ kho phản hồi quá chậm.",...}
+# {"message":"Inventory service response timed out.",...}
 ```
 
 > **Tại sao mất 9 giây?** Mỗi lần retry timeout sau 3 giây, retry 3 lần → 3×3 = 9 giây. Sau 9 giây mới trả lỗi về.
+> 
+> **Quan sát inventory-service log:** thấy `[TEST] Simulating slow response (5s)...` xuất hiện **3 lần** — inventory nhận đủ 3 request nhưng order-service hủy sau 3s mỗi lần.
 
 ---
 
@@ -875,31 +879,46 @@ curl -X POST http://localhost:3001/orders/sync-resilient \
 Chạy 4 lần liên tiếp, quan sát thời gian phản hồi thay đổi:
 
 ```bash
-# Lần 1-3: retry → mỗi lần mất ~9 giây (chậm)
-curl -w "\nHTTP %{http_code} - Thời gian: %{time_total}s\n" \
+# Lần 1, 2, 3: retry → mỗi lần mất ~9 giây, failureCount tăng dần
+curl -w "\nHTTP %{http_code} - Time: %{time_total}s\n" \
   -X POST http://localhost:3001/orders/sync-resilient \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"TRIGGER-ERROR\",\"quantity\":1}"
+# order-service log: "[CB:inventory-service] Failure 1/3"
+# order-service log: "[CB:inventory-service] Failure 2/3"
+# order-service log: "[CB:inventory-service] -> OPEN (3 consecutive failures)"
 ```
 
 Sau **lần thứ 3**, circuit chuyển sang **OPEN**:
 ```bash
-# Lần 4: circuit OPEN → fail ngay < 100ms (nhanh!)
-curl -w "\nHTTP %{http_code} - Thời gian: %{time_total}s\n" \
+# Lần 4: circuit OPEN → fail ngay < 100ms
+curl -w "\nHTTP %{http_code} - Time: %{time_total}s\n" \
   -X POST http://localhost:3001/orders/sync-resilient \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"TRIGGER-ERROR\",\"quantity\":1}"
-# Kỳ vọng: 503 ngay lập tức
-# {"message":"Dịch vụ kho tạm thời không khả dụng. Vui lòng thử lại sau.",...}
+# Kỳ vọng: 503 trong < 0.1s
+# {"message":"Inventory service temporarily unavailable. Please try again later.",...}
 ```
 
 Kiểm tra trạng thái circuit:
 ```bash
 curl http://localhost:3001/orders/circuit-status
 # Kỳ vọng khi OPEN:
-# {"service":"inventory-service","state":"OPEN","failureCount":3,...}
+# {"name":"inventory-service","state":"OPEN","failureCount":3,...}
+```
 
-# Chờ 10 giây → circuit thử HALF_OPEN → gọi lại 1 lần thành công → CLOSED
+**Recover về CLOSED:**
+```bash
+# Chờ 10 giây → circuit tự chuyển HALF_OPEN
+# Gọi 1 request bình thường (không phải TRIGGER-ERROR)
+curl -X POST http://localhost:3001/orders/sync-resilient \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
+# order-service log: "[CB:inventory-service] HALF_OPEN -> CLOSED (service recovered)"
+
+# Confirm:
+curl http://localhost:3001/orders/circuit-status
+# {"state":"CLOSED","failureCount":0,...}
 ```
 
 ---
@@ -912,13 +931,78 @@ curl -X POST http://localhost:3001/orders/async \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
 # Kỳ vọng: 202 NGAY LẬP TỨC (< 10ms)
-# {"message":"Đơn hàng đang được xử lý","trace_id":"..."}
+# {"message":"Order accepted, processing in background","trace_id":"..."}
 
 # Quan sát log inventory-service: sẽ thấy log trừ kho sau đó
-# "[RabbitMQ Async] RESERVE thành công"
+# "[RabbitMQ Async] RESERVE success."
 ```
 
 Mở http://localhost:15672 (guest/guest) → **Queues** → thấy `inventory_order_created_queue` có message count tăng/giảm.
+
+**Test DLX — message thất bại vào Dead Letter Queue:**
+```bash
+# Case 1: Hết hàng → nack → DLX
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"MACBOOK-M3\",\"quantity\":999}"
+
+# Case 2: Sản phẩm không tồn tại → nack → DLX
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d "{\"productId\":\"FAKE-SKU\",\"quantity\":1}"
+
+# Kỳ vọng inventory-service log:
+# error: [RabbitMQ Async] RESERVE failed - out of stock.
+# error: [DLQ] Message failed - routed to Dead Letter Queue
+#        { event: {...}, reason: 'rejected', original_queue: 'inventory_order_created_queue' }
+```
+
+Verify trên RabbitMQ UI → **Queues** → `inventory_order_failed_queue` → **Get messages** — thấy message với `x-death` headers ghi lý do.
+
+**Muốn thấy raw payload trên queue thay vì chỉ thấy trong log? Comment `channel.ack(msg)` trong DLQ consumer:**
+
+Mở `inventory-service/server.js`, tìm hàm `startDLQConsumer()`:
+
+```js
+// TRƯỚC (default) — consumer ack ngay → message biến mất khỏi queue sau khi log
+channel.ack(msg);   // ← comment dòng này lại
+
+// SAU khi comment — message không bị xóa, ở trạng thái "Unacked"
+// channel.ack(msg);
+```
+
+Sau đó:
+1. Restart inventory-service: `Ctrl+C` → `node server.js`
+2. Gửi lại request lỗi (hết hàng hoặc FAKE-SKU)
+3. Mở RabbitMQ UI → **Queues** → `inventory_order_failed_queue`
+4. Thấy cột **Unacked = 1** (message đang bị giữ chờ ack)
+5. Click vào queue → tab **Get messages** → chọn **Ack Mode: Nack message requeue true** → **Get Message(s)**
+
+Bạn sẽ thấy full payload như sau:
+```json
+{
+  "payload": "{\"productId\":\"FAKE-SKU\",\"quantity\":1,\"orderId\":\"...\"}",
+  "properties": {
+    "headers": {
+      "x-trace-id": "...",
+      "x-death": [
+        {
+          "count": 1,
+          "reason": "rejected",
+          "queue": "inventory_order_created_queue",
+          "time": "2026-01-01T00:00:00Z",
+          "exchange": "order_events",
+          "routing-keys": [""]
+        }
+      ]
+    }
+  }
+}
+```
+
+> **`x-death.reason: "rejected"`** — RabbitMQ tự gắn header này khi consumer gọi `nack(..., false, false)`. Đây là bằng chứng message đến từ đâu và tại sao bị "chết".
+
+> **Nhớ bỏ comment lại** `channel.ack(msg)` sau khi quan sát xong — không thì DLQ sẽ tích lũy Unacked messages mãi.
 
 ---
 
@@ -928,7 +1012,7 @@ Mở http://localhost:15672 (guest/guest) → **Queues** → thấy `inventory_o
 curl -X POST http://localhost:3001/orders/stream \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
-# Kỳ vọng: 202 {"message":"Đã ghi nhận hành vi",...}
+# Kỳ vọng: 202 {"message":"Behavior tracked",...}
 ```
 
 Mở http://localhost:8080 → **Topics** → `user-behavior-logs` → **Messages** → thấy message vừa publish.
@@ -943,31 +1027,32 @@ curl -X POST http://localhost:3001/orders/sync-grpc \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":1}"
 # Kỳ vọng: 200
-# {"message":"Đặt hàng thành công [gRPC]","stock_remaining":10,"protocol":"gRPC",...}
+# {"message":"Order placed successfully [gRPC]","stock_remaining":10,"protocol":"gRPC",...}
 
 # Hết hàng
 curl -X POST http://localhost:3001/orders/sync-grpc \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"IPHONE-15\",\"quantity\":999}"
 # Kỳ vọng: 400
-# {"message":"Hết hàng (chỉ còn 10, yêu cầu 999)",...}
+# {"message":"Out of stock (only 10 left, requested 999)",...}
 
 # Sản phẩm không tồn tại (gRPC NOT_FOUND → HTTP 404)
 curl -X POST http://localhost:3001/orders/sync-grpc \
   -H "Content-Type: application/json" \
   -d "{\"productId\":\"INVALID-SKU\",\"quantity\":1}"
 # Kỳ vọng: 404
-# {"message":"Sản phẩm không tồn tại: INVALID-SKU",...}
+# {"message":"Product not found: INVALID-SKU",...}
 ```
 
 **So sánh log giữa REST và gRPC** — quan sát terminal inventory-service:
 ```
-# REST call → log từ /sync hoặc /sync-resilient:
-info: GET /inventory/IPHONE-15 200
+# REST call → log từ inventoryRoutes.js:
+info: [HTTP Sync] Check stock request: IPHONE-15.
+info: [HTTP Sync] IPHONE-15 in stock (available: 10).
 
 # gRPC call → log từ grpcServer.js:
-info: gRPC: Nhận yêu cầu CheckStock  { product_id: 'IPHONE-15', protocol: 'gRPC' }
-info: gRPC: Kết quả CheckStock       { available: true, stock: 10, protocol: 'gRPC/HTTP2' }
+info: gRPC: CheckStock request received  { product_id: 'IPHONE-15', protocol: 'gRPC' }
+info: gRPC: CheckStock result            { available: true, stock: 10 }
 ```
 
 ---

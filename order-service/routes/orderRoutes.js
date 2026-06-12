@@ -303,4 +303,89 @@ router.post('/sync-grpc', async (req, res) => {
     }
 });
 
+// =========================================================================
+// GIAI ĐOẠN 5 — KAFKA CHOREOGRAPHY SAGA
+//
+// Luồng đầy đủ (3 service phối hợp qua Kafka, không service nào gọi nhau trực tiếp):
+//
+//  [order-service]     POST /orders/kafka-saga
+//        │ publish "order.created"
+//        ▼
+//  [Kafka topic: order-events]
+//        │
+//        ▼
+//  [inventory-service] consume → reserve stock
+//        │ publish "inventory.reserved" hoặc "inventory.failed"
+//        ▼
+//  [Kafka topic: inventory-events]
+//        │
+//        ▼
+//  [payment-service]   consume → charge card
+//        │ publish "payment.completed" hoặc "payment.failed"
+//        ▼
+//  [Kafka topic: payment-events]
+//        │
+//        ▼
+//  [inventory-service] consume → nếu payment.failed → rollback kho (SAGA compensation)
+//
+// Test scenarios:
+//   Thành công:     curl -X POST http://localhost:3001/orders/kafka-saga \
+//                    -H "Content-Type: application/json" \
+//                    -d '{"productId":"IPHONE-15","quantity":1}'
+//
+//   Hết hàng:       -d '{"productId":"FAKE-SKU","quantity":1}'
+//                   → inventory.failed, payment-service không xử lý
+//
+//   Thanh toán lỗi: -d '{"productId":"FAIL-PAYMENT","quantity":1}'
+//                   → inventory.reserved → payment.failed → kho bị rollback
+//
+// Theo dõi log: Kafka UI http://localhost:8080 → topics: order-events, inventory-events, payment-events
+// =========================================================================
+router.post('/kafka-saga', async (req, res) => {
+    const traceId = randomUUID();
+    const { productId, quantity } = req.body;
+
+    logger.info({ trace_id: traceId, message: `[Kafka SAGA] Order received: ${productId} x${quantity}` });
+
+    const kafkaProducer = getKafkaProducer();
+    if (!kafkaProducer) {
+        logger.error({ trace_id: traceId, message: `[Kafka SAGA] Kafka not ready.` });
+        return res.status(503).json({ message: 'Kafka not ready', trace_id: traceId });
+    }
+
+    try {
+        const orderId = randomUUID();
+
+        await kafkaProducer.send({
+            topic: 'order-events',
+            messages: [{
+                key: orderId,       // Cùng orderId → cùng partition → đúng thứ tự event
+                value: JSON.stringify({
+                    type: 'order.created',
+                    orderId,
+                    productId,
+                    quantity,
+                    traceId,
+                    createdAt: new Date().toISOString(),
+                }),
+                headers: { 'x-trace-id': traceId },
+            }],
+        });
+
+        logger.info({ trace_id: traceId, message: `[Kafka SAGA] "order.created" published. orderId=${orderId}` });
+
+        // Trả về ngay — không chờ inventory hay payment
+        // Đây là bản chất của async/event-driven: fire and forget
+        res.status(202).json({
+            message: 'Order accepted — SAGA in progress (check logs for status)',
+            orderId,
+            trace_id: traceId,
+        });
+
+    } catch (error) {
+        logger.error({ trace_id: traceId, message: `[Kafka SAGA] Publish error: ${error.message}` });
+        res.status(500).json({ message: 'Internal server error', trace_id: traceId });
+    }
+});
+
 module.exports = router;
