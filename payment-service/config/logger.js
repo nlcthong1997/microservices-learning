@@ -2,16 +2,31 @@
 const winston = require('winston');
 const LokiTransport = require('winston-loki');
 
+const consoleFormat = winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+);
+
+const lokiFormat = winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf((info) => {
+        // eslint-disable-next-line no-unused-vars
+        const { [Symbol.for('splat')]: _splat, ...rest } = info;
+        return JSON.stringify(rest);
+    })
+);
+
 const logger = winston.createLogger({
     level: 'info',
-    format: winston.format.json(),
+    defaultMeta: { service: 'payment-service' },
     transports: [
-        new winston.transports.Console(),
+        new winston.transports.Console({ format: consoleFormat }),
         new LokiTransport({
             host: 'http://localhost:3100',
-            labels: { job: 'payment-service' },
-            json: true,
-            format: winston.format.json(),
+            labels: { app: 'payment-service' },
+            batching: false,
+            replaceTimestamp: true,
+            format: lokiFormat,
             onConnectionError: (err) => console.error('[Loki] Connection error:', err)
         })
     ]

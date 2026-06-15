@@ -20,6 +20,16 @@ Dự án học microservice thực chiến — xây dựng từng giai đoạn, 
 12. [Thuật ngữ](#12-thuật-ngữ)
 13. [Dashboard & Monitoring](#13-dashboard--monitoring)
 14. [Chạy dự án & Test chi tiết](#14-chạy-dự-án--test-chi-tiết)
+    - Test 1: Health check
+    - Test 2: HTTP Sync cơ bản
+    - Test 3: Timeout
+    - Test 4: Retry + Circuit Breaker
+    - Test 5: RabbitMQ Async + DLX
+    - Test 6: Kafka Stream
+    - Test 7: gRPC
+    - Test 8: Distributed Tracing
+    - **Test 9: Kafka SAGA (happy path / inventory fail / payment fail + rollback)**
+    - **Test 10: Visual Live Dashboard (SSE)**
 
 ---
 
@@ -93,7 +103,8 @@ analytics-service → Python (nếu muốn), scale nhiều CPU
 │  POST /orders/sync-resilient → HTTP + Timeout + Retry + CB    │
 │  POST /orders/sync-grpc      → gRPC binary call               │
 │  POST /orders/async          → Publish RabbitMQ               │
-│  POST /orders/stream         → Publish Kafka                  │
+│  POST /orders/stream         → Publish Kafka (analytics)      │
+│  POST /orders/kafka-saga     → Kafka Choreography SAGA        │
 │  GET  /orders/circuit-status → Xem trạng thái circuit breaker │
 │  GET  /health                → Health check                   │
 └──────┬──────────────────────────┬──────────────┬─────────────┘
@@ -116,6 +127,11 @@ Observability:
   Winston → Loki (:3100) → Grafana (:3000)
   RabbitMQ Management (:15672)
   Kafka UI (:8080)
+  ui-service (:3004) — Visual Live Dashboard (SSE)
+
+payment-service (:3003):
+  Kafka consumer: inventory-events → publish payment-events
+  Trigger SAGA rollback khi productId = FAIL-PAYMENT
 ```
 
 ### Tại sao order-service dùng HTTP client (axios) để gọi inventory-service?
@@ -178,7 +194,22 @@ microservice-learning-2026/
         └── inventoryRoutes.js  ← Route /inventory/:productId + test triggers
 ```
 
-`[GĐ2]` — Giai đoạn 2. `[GĐ6]` — Giai đoạn 6 (gRPC). Mỗi giai đoạn thêm một lớp phức tạp có lý do rõ ràng.
+`[GĐ2]` — Giai đoạn 2. `[GĐ6]` — Giai đoạn 6 (gRPC). `[GĐ7]` — Giai đoạn 7 (Kafka SAGA). Mỗi giai đoạn thêm một lớp phức tạp có lý do rõ ràng.
+
+```
+├── payment-service/            ← Service xử lý thanh toán (Kafka SAGA) [GĐ7]
+│   ├── server.js               ← Consume inventory-events → publish payment-events
+│   ├── package.json
+│   └── config/
+│       ├── logger.js           ← Winston logger → Loki
+│       └── kafka.js            ← Kafka producer + consumer + ensureTopicsExist()
+│
+└── ui-service/                 ← Visual Live Dashboard [GĐ7]
+    ├── server.js               ← SSE server + Kafka consumer + RabbitMQ observer
+    ├── package.json
+    └── public/
+        └── index.html          ← Animated SVG topology (2 tabs: Kafka SAGA / RabbitMQ)
+```
 
 ### Tại sao có `services/` layer?
 
@@ -810,6 +841,14 @@ cd order-service && npm install && node server.js
 # ✅ "RabbitMQ infrastructure ready"
 # ✅ "Kafka infrastructure ready"
 # ✅ "Order Service ready on port 3001"
+
+# Terminal 4: Payment Service (cần cho Kafka SAGA)
+cd payment-service && npm install && node server.js
+# Kỳ vọng: "Payment Service ready on port 3003"
+
+# Terminal 5: Visual Dashboard (optional)
+cd ui-service && npm install && node server.js
+# Kỳ vọng: "Dashboard ready → http://localhost:3004"
 ```
 
 ### Sản phẩm trong kho giả
@@ -821,6 +860,7 @@ cd order-service && npm install && node server.js
 | `LAPTOP-MODULAR-TEST` | 100 | Test async bulk |
 | `TRIGGER-SLOW` | — | Delay 5 giây → test timeout |
 | `TRIGGER-ERROR` | — | Luôn trả 500 → test retry/circuit breaker |
+| `FAIL-PAYMENT` | 99 | Inventory **reserve thành công**, nhưng payment-service từ chối → SAGA rollback |
 
 ---
 
@@ -1054,6 +1094,141 @@ info: [HTTP Sync] IPHONE-15 in stock (available: 10).
 info: gRPC: CheckStock request received  { product_id: 'IPHONE-15', protocol: 'gRPC' }
 info: gRPC: CheckStock result            { available: true, stock: 10 }
 ```
+
+---
+
+### Test 9 — Kafka Choreography SAGA
+
+> Cần khởi động thêm `payment-service` và `ui-service`:
+> ```bash
+> # Terminal 4: Payment Service
+> cd payment-service && npm install && node server.js
+> # Kỳ vọng: "Payment Service ready on port 3003"
+>
+> # Terminal 5: UI Dashboard
+> cd ui-service && npm install && node server.js
+> # Kỳ vọng: "Dashboard ready → http://localhost:3004"
+> ```
+
+Mở http://localhost:3004 → tab **⚡ Kafka SAGA** để xem animation.
+
+#### Scenario A — Happy path (hàng đủ, thanh toán thành công)
+
+```bash
+curl -X POST http://localhost:3001/orders/kafka-saga \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"IPHONE-15","quantity":1}'
+# Kỳ vọng: 202 {"message":"Order queued for SAGA processing",...}
+```
+
+Trên UI dashboard thấy **4 packet animation liên tiếp**:
+
+| Bước | Event | Màu | Đường đi |
+|---|---|---|---|
+| 1 | `order.created` | xanh dương | order-service → `[order-events]` → inventory-service |
+| 2 | `inventory.reserved` | xanh lá | inventory-service → `[inventory-events]` → payment-service |
+| 3 | `payment.completed` | xanh lá | payment-service → terminal (mũi tên lên ✓) |
+
+#### Scenario B — Inventory fail (hàng không tồn tại)
+
+```bash
+curl -X POST http://localhost:3001/orders/kafka-saga \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"FAKE-SKU","quantity":1}'
+```
+
+UI: `order.created` → `inventory.failed` (mũi tên lên ✗, màu đỏ) — SAGA dừng tại inventory.
+
+#### Scenario C — Payment fail → SAGA rollback (quan trọng nhất)
+
+```bash
+curl -X POST http://localhost:3001/orders/kafka-saga \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"FAIL-PAYMENT","quantity":1}'
+```
+
+UI thấy **5 packet animation — full SAGA rollback flow**:
+
+| Bước | Event | Màu | Đường đi |
+|---|---|---|---|
+| 1 | `order.created` | xanh | order-service → `[order-events]` → inventory-service |
+| 2 | `inventory.reserved` | xanh lá | inventory-service → `[inventory-events]` → payment-service |
+| 3 | `payment.failed` | đỏ | payment-service → cong xuống → `[payment-events]` |
+| 4 | rollback | đỏ | `[payment-events]` → cong ngược lại → inventory-service |
+
+**Tại sao FAIL-PAYMENT có stock=99?**
+
+Nếu không có entry trong mockInventory, inventory-service trả `inventory.failed` ngay từ bước 2 — SAGA không bao giờ đến payment-service. Phải cho inventory **reserve thành công** thì mới trigger được payment fail và compensating transaction (hoàn kho).
+
+**Verify compensating transaction bằng log:**
+
+```
+# inventory-service log:
+[Kafka SAGA] Received order.created — productId=FAIL-PAYMENT
+[Kafka SAGA] Stock RESERVED — stock remaining: 98    ← kho trừ 1
+
+# payment-service log:
+[Payment] FAILED — card declined for orderId=xxx. SAGA rollback triggered.
+
+# inventory-service log (sau khi nhận payment.failed):
+[Kafka SAGA] payment.failed received — rolling back stock for orderId=xxx
+[Kafka SAGA] Stock ROLLED BACK — stock restored to: 99  ← kho hoàn lại
+```
+
+**Đây là Choreography SAGA** — không có orchestrator, các service tự phối hợp qua events:
+
+```
+order-service → [order-events] → inventory-service
+                                      ↓ reserve stock
+                                 [inventory-events] → payment-service
+                                                           ↓ charge fails
+                                                      [payment-events]
+                                                           ↓
+                                 inventory-service ← compensating transaction
+                                      ↓ rollback stock
+```
+
+---
+
+### Test 10 — Visual Live Dashboard
+
+```bash
+# Mở browser
+open http://localhost:3004
+# hoặc trên Windows:
+start http://localhost:3004
+```
+
+**Tab ⚡ Kafka SAGA** — xem packet di chuyển qua từng Kafka topic node:
+```bash
+# Chạy lần lượt để thấy từng loại animation
+curl -X POST http://localhost:3001/orders/kafka-saga -H "Content-Type: application/json" -d '{"productId":"IPHONE-15","quantity":1}'
+curl -X POST http://localhost:3001/orders/kafka-saga -H "Content-Type: application/json" -d '{"productId":"FAKE-SKU","quantity":1}'
+curl -X POST http://localhost:3001/orders/kafka-saga -H "Content-Type: application/json" -d '{"productId":"FAIL-PAYMENT","quantity":1}'
+```
+
+**Tab 🐰 RabbitMQ** — xem packet qua exchange/queue/DLX topology:
+```bash
+curl -X POST http://localhost:3001/orders/async -H "Content-Type: application/json" -d '{"productId":"IPHONE-15","quantity":1}'
+curl -X POST http://localhost:3001/orders/async -H "Content-Type: application/json" -d '{"productId":"FAKE-SKU","quantity":1}'
+```
+
+**Cơ chế hoạt động (SSE — Server-Sent Events):**
+```
+Browser                          ui-service (:3004)
+  │                                    │
+  ├── GET /stream ──────────────────→  │  (1 HTTP connection, giữ mãi)
+  │                                    │
+  │                          Kafka consumer nhận event
+  │ ←── data: {"type":"order.created"} │  (server ghi chunk)
+  │                                    │
+  │                          RabbitMQ observer nhận nack
+  │ ←── data: {"type":"rmq.order.dlq"} │
+```
+- Không phải polling — browser **không** gọi API định kỳ
+- Browser dùng `EventSource` Web API (có sẵn, không cần thư viện)
+- Server dùng `res.write()` để push chunk bất cứ lúc nào
+- RabbitMQ observer dùng **exclusive queue** (tự xóa khi disconnect), không tranh message với inventory-service
 
 ---
 

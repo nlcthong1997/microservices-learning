@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Microservice Flow — Live Dashboard</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #070d1a; color: #e2e8f0;
+    font-family: 'Consolas','Monaco','Courier New',monospace;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+/* ── Header ── */
+header {
+    background: #0f172a; border-bottom: 1px solid #1e293b;
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+}
+.dot-live {
+    width: 8px; height: 8px; background: #ef4444; border-radius: 50%; flex-shrink: 0;
+    animation: blink 1.2s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;box-shadow:0 0 6px #ef4444}50%{opacity:.2;box-shadow:none} }
+header h1 { font-size: 12px; color: #64748b; letter-spacing:.05em; }
+.tabs { display: flex; gap: 4px; margin-left: 12px; }
+.tab-btn {
+    background: #1e293b; border: 1px solid #334155; color: #64748b;
+    font-size: 11px; padding: 4px 12px; border-radius: 5px; cursor: pointer;
+    font-family: monospace; transition: all .2s;
+}
+.tab-btn.active { background: #1e3a5f; border-color: #3b82f6; color: #60a5fa; }
+.tab-btn:hover:not(.active) { background: #263345; color: #94a3b8; }
+#status { margin-left: auto; font-size: 11px; color: #475569; }
+#status.ok { color: #22c55e; }
+/* ── Main ── */
+.main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+/* ── Diagram panel ── */
+.flow-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px 20px; min-width: 0; overflow: hidden; }
+.diagram-wrap { width: 100%; max-width: 920px; display: none; }
+.diagram-wrap.active { display: block; }
+/* ── SVG Node styles ── */
+.svc-rect      { fill: #0f1929; stroke: #2d4a6b; stroke-width: 1.5; }
+.kafka-topic   { fill: #0f1a08; stroke: #b45309; stroke-width: 1.5; }
+.rmq-exchange  { fill: #080f1e; stroke: #1d4ed8; stroke-width: 1.5; }
+.rmq-queue     { fill: #0e0a1e; stroke: #7c3aed; stroke-width: 1.5; }
+.rmq-dlx       { fill: #1a0808; stroke: #dc2626; stroke-width: 1.5; }
+.rmq-dlq       { fill: #1a0808; stroke: #dc2626; stroke-width: 1.5; stroke-dasharray: 4,2; }
+.rmq-saga-exch { fill: #181208; stroke: #b45309; stroke-width: 1.5; }
+.rmq-saga-q    { fill: #181208; stroke: #b45309; stroke-width: 1.5; }
+.rollback-tag  { fill: #0f1e0f; stroke: #16a34a; stroke-width: 1; stroke-dasharray: 3,2; }
+/* SVG text */
+.svc-name  { fill: #cbd5e1; font-size: 12px; font-weight: bold; text-anchor: middle; font-family: monospace; }
+.svc-port  { fill: #3d5470; font-size: 10px; text-anchor: middle; font-family: monospace; }
+.node-name { fill: #94a3b8; font-size: 10px; text-anchor: middle; font-family: monospace; font-weight: bold; }
+.node-tag  { fill: #475569; font-size: 9px;  text-anchor: middle; font-family: monospace; }
+.arrow-lbl { fill: #2d4a6b; font-size: 9px;  text-anchor: middle; font-family: monospace; }
+.nack-lbl  { fill: #7f1d1d; font-size: 9px;  text-anchor: middle; font-family: monospace; }
+.static-arrow { stroke: #1e3045; stroke-width: 1.2; fill: none; }
+/* ── Log panel ── */
+.log-panel { width: 320px; flex-shrink: 0; background: #080e1c; border-left: 1px solid #1e293b; display: flex; flex-direction: column; min-height: 0; }
+.log-header { padding: 7px 10px; background: #0f172a; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #475569; flex-shrink: 0; }
+.log-header button { background: #1e293b; border: 1px solid #334155; color: #64748b; font-size: 9px; padding: 2px 7px; border-radius: 3px; cursor: pointer; font-family: monospace; }
+.log-header button:hover { background: #334155; }
+.log-body { flex: 1; overflow-y: auto; padding: 5px; min-height: 0; }
+.log-body::-webkit-scrollbar { width: 3px; }
+.log-body::-webkit-scrollbar-thumb { background: #1e293b; }
+.log-item { padding: 6px 8px; border-radius: 5px; margin-bottom: 4px; background: #0d1424; border-left: 3px solid #1e293b; animation: slidein .2s ease; font-size: 10px; }
+@keyframes slidein { from{opacity:0;transform:translateX(6px)} to{opacity:1;transform:none} }
+.log-item.blue   { border-left-color: #3b82f6; }
+.log-item.green  { border-left-color: #22c55e; }
+.log-item.red    { border-left-color: #ef4444; }
+.log-item.yellow { border-left-color: #eab308; }
+.log-time   { color: #1e3550; font-size: 9px; }
+.log-src    { font-size: 9px; opacity: .6; float: right; }
+.log-type   { font-size: 11px; font-weight: bold; margin: 2px 0; }
+.log-type.blue   { color: #60a5fa; }
+.log-type.green  { color: #4ade80; }
+.log-type.red    { color: #f87171; }
+.log-type.yellow { color: #facc15; }
+.log-detail { color: #2d4a6b; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ── Stats ── */
+.stats { padding: 7px 10px; background: #0f172a; border-top: 1px solid #1e293b; display: flex; gap: 4px; flex-shrink: 0; }
+.stat { flex: 1; text-align: center; }
+.stat-num { font-size: 20px; font-weight: bold; line-height: 1.1; }
+.stat-lbl { font-size: 8px; color: #1e3550; margin-top: 1px; letter-spacing: .05em; }
+/* ── Sync / gRPC tab ── */
+.sync-controls { margin-top: 12px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.ctrl-group    { background: #0b1220; border: 1px solid #1e293b; border-radius: 7px; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
+.ctrl-grp-lbl  { font-size: 9px; color: #475569; letter-spacing:.08em; text-transform:uppercase; padding-bottom: 4px; border-bottom: 1px solid #1e293b; margin-bottom: 2px; }
+.ctrl-btn      { background: #0f1929; border: 1px solid #1e3a5f; color: #475569; font-size: 10px; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-family: monospace; text-align: left; transition: all .15s; display: flex; align-items: center; gap: 7px; }
+.ctrl-btn:hover:not(:disabled) { background: #162035; border-color: #2d5a8c; color: #94a3b8; }
+.ctrl-btn:disabled { opacity: .35; cursor: not-allowed; }
+.b-rest { background: #0a1830; color: #60a5fa; font-size: 9px; padding: 1px 5px; border-radius: 3px; border: 1px solid #1e3a5f; flex-shrink:0; }
+.b-grpc { background: #180a30; color: #a78bfa; font-size: 9px; padding: 1px 5px; border-radius: 3px; border: 1px solid #3b1e7f; flex-shrink:0; }
+#sync-status-bar { margin-top: 8px; background: #0b1220; border: 1px solid #1e293b; border-radius: 5px; padding: 7px 12px; font-size: 10px; display: flex; gap: 12px; align-items: center; min-height: 32px; flex-wrap: wrap; }
+.ss-lbl { color: #1e3550; } .ss-val { font-weight: bold; }
+</style>
+</head>
+<body>
+<header>
+    <div class="dot-live"></div>
+    <h1>Microservice Flow — Visual Live Dashboard</h1>
+    <nav class="tabs">
+        <button id="btn-kafka"  class="tab-btn active"  onclick="switchTab('kafka')">⚡ Kafka SAGA</button>
+        <button id="btn-rabbit" class="tab-btn"         onclick="switchTab('rabbit')">🐰 RabbitMQ</button>
+        <button id="btn-sync"   class="tab-btn"         onclick="switchTab('sync')">🔗 REST / gRPC</button>
+    </nav>
+    <span id="status">● Connecting...</span>
+</header>
+<div class="main">
+<div class="flow-panel">
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TAB 1 — KAFKA SAGA
+     Diagram shows services + Kafka topic nodes as intermediate stops
+     Packets animate through: service → [Kafka topic] → service
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="diagram-kafka" class="diagram-wrap active">
+<svg viewBox="0 0 890 275" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;overflow:visible">
+<defs>
+    <marker id="ka-arr"   markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#1e3a55"/></marker>
+    <marker id="ka-blue"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#3b82f6"/></marker>
+    <marker id="ka-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#22c55e"/></marker>
+    <marker id="ka-red"   markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#ef4444"/></marker>
+    <filter id="glow-k"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+
+<!-- ARROWS -->
+<path id="ka1" class="static-arrow" d="M 130,100 L 174,100" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="152" y="92">pub</text>
+<path id="ka2" class="static-arrow" d="M 284,100 L 345,100" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="315" y="92">sub</text>
+<path id="ka3" class="static-arrow" d="M 485,100 L 540,100" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="513" y="92">pub</text>
+<path id="ka4" class="static-arrow" d="M 662,100 L 727,100" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="695" y="92">sub</text>
+<!-- inventory.failed → terminal (up) -->
+<path id="ka5" class="static-arrow" d="M 415,68 L 415,16" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="415" y="10">inventory.failed ✗</text>
+<!-- payment.completed → terminal (up) -->
+<path id="ka6" class="static-arrow" d="M 787,68 L 787,16" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="787" y="10">payment.completed ✓</text>
+<!-- SAGA rollback: payment → payment-events topic (curve) -->
+<path id="ka7" class="static-arrow" d="M 787,132 C 787,240 665,240 665,215" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="750" y="210">pub</text>
+<!-- SAGA rollback: payment-events topic → inventory (curve) -->
+<path id="ka8" class="static-arrow" d="M 537,215 C 537,260 415,260 415,132" marker-end="url(#ka-arr)"/>
+<text class="arrow-lbl" x="460" y="266">sub · SAGA rollback</text>
+
+<!-- SERVICE BOXES -->
+<rect id="kb-order"     class="svc-rect" x="10"  y="68"  width="120" height="64" rx="8"/>
+<text class="svc-name"  x="70"  y="103">order-service</text>
+<text class="svc-port"  x="70"  y="119">:3001</text>
+
+<rect id="kb-inventory" class="svc-rect" x="345" y="68"  width="140" height="64" rx="8"/>
+<text class="svc-name"  x="415" y="103">inventory-service</text>
+<text class="svc-port"  x="415" y="119">:3002</text>
+
+<rect id="kb-payment"   class="svc-rect" x="727" y="68"  width="120" height="64" rx="8"/>
+<text class="svc-name"  x="787" y="103">payment-service</text>
+<text class="svc-port"  x="787" y="119">:3003</text>
+
+<!-- KAFKA TOPIC NODES (orange border = Kafka color) -->
+<rect id="kt-order-events" class="kafka-topic" x="174" y="82"  width="110" height="36" rx="5"/>
+<text class="node-name" x="229" y="97">order-events</text>
+<text class="node-tag"  x="229" y="110">📨 Kafka topic</text>
+
+<rect id="kt-inv-events"   class="kafka-topic" x="540" y="82"  width="122" height="36" rx="5"/>
+<text class="node-name" x="601" y="97">inventory-events</text>
+<text class="node-tag"  x="601" y="110">📨 Kafka topic</text>
+
+<rect id="kt-pay-events"   class="kafka-topic" x="537" y="197" width="128" height="36" rx="5"/>
+<text class="node-name" x="601" y="212">payment-events</text>
+<text class="node-tag"  x="601" y="225">📨 Kafka topic</text>
+
+<!-- PACKETS -->
+<circle id="kp-oc" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-k)"/>
+<circle id="kp-ir" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-k)"/>
+<circle id="kp-if" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-k)"/>
+<circle id="kp-pc" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-k)"/>
+<circle id="kp-pf" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-k)"/>
+</svg>
+</div><!-- /diagram-kafka -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TAB 2 — RABBITMQ
+     Diagram shows the full RabbitMQ topology:
+       order-service → Exchange (fanout) → Queue → inventory-service
+       Queue (nack)  → DLX Exchange      → DLQ
+       SAGA trigger  → SAGA Exchange     → SAGA Queue → inventory-service
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="diagram-rabbit" class="diagram-wrap">
+<svg viewBox="0 0 890 295" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;overflow:visible">
+<defs>
+    <marker id="ra-arr"   markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#1e3a55"/></marker>
+    <marker id="ra-blue"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#3b82f6"/></marker>
+    <marker id="ra-red"   markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#ef4444"/></marker>
+    <marker id="ra-amber" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#b45309"/></marker>
+    <filter id="glow-r"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+
+<!-- ── ROW 1: MAIN FLOW ── -->
+<path id="ra1" class="static-arrow" d="M 122,85 L 157,85" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="140" y="77">publish</text>
+<path id="ra2" class="static-arrow" d="M 302,85 L 350,85" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="326" y="77">route</text>
+<path id="ra3" class="static-arrow" d="M 502,85 L 548,85" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="525" y="77">consume</text>
+
+<!-- ── ROW 2: DLX — nack from queue ── -->
+<!-- Nack arrow: queue bottom → DLX top (curve) -->
+<path id="ra4" class="static-arrow" d="M 426,105 C 426,158 299,158 299,178" marker-end="url(#ra-arr)"/>
+<text class="nack-lbl" x="350" y="150">nack</text>
+<text class="nack-lbl" x="350" y="161">x-dead-letter</text>
+<path id="ra5" class="static-arrow" d="M 373,198 L 430,198" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="402" y="190">route</text>
+
+<!-- ── ROW 3: SAGA ROLLBACK ── -->
+<path id="ra6" class="static-arrow" d="M 60,258 L 225,258" marker-end="url(#ra-arr)"/>
+<path id="ra7" class="static-arrow" d="M 373,258 L 425,258" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="399" y="250">route</text>
+<path id="ra8" class="static-arrow" d="M 575,258 L 625,258" marker-end="url(#ra-arr)"/>
+<text class="arrow-lbl" x="600" y="250">consume</text>
+
+<!-- ── SERVICE BOXES ── -->
+<rect id="rb-order"     class="svc-rect" x="7"   y="53"  width="115" height="64" rx="8"/>
+<text class="svc-name"  x="64"  y="88">order-service</text>
+<text class="svc-port"  x="64"  y="104">:3001</text>
+
+<rect id="rb-inventory" class="svc-rect" x="548" y="53"  width="138" height="64" rx="8"/>
+<text class="svc-name"  x="617" y="88">inventory-service</text>
+<text class="svc-port"  x="617" y="104">:3002</text>
+
+<!-- ── EXCHANGE NODES (blue border) ── -->
+<rect id="re-main" class="rmq-exchange" x="157" y="65" width="145" height="40" rx="5"/>
+<text class="node-name" x="229" y="81">order_events</text>
+<text class="node-tag"  x="229" y="95">🔀 Exchange (fanout)</text>
+
+<!-- ── QUEUE NODE (purple border) ── -->
+<rect id="rq-main" class="rmq-queue" x="350" y="65" width="152" height="40" rx="5"/>
+<text class="node-name" x="426" y="81">inventory_order_created</text>
+<text class="node-tag"  x="426" y="95">📦 Queue  durable</text>
+
+<!-- ── DLX ROW ── -->
+<rect id="re-dlx" class="rmq-dlx" x="225" y="178" width="148" height="40" rx="5"/>
+<text class="node-name" x="299" y="194" style="fill:#f87171">order_events_dlx</text>
+<text class="node-tag"  x="299" y="208" style="fill:#7f1d1d">🔀 DLX Exchange</text>
+
+<rect id="rq-dlq" class="rmq-dlq" x="430" y="178" width="158" height="40" rx="5"/>
+<text class="node-name" x="509" y="194" style="fill:#f87171">inventory_order_failed</text>
+<text class="node-tag"  x="509" y="208" style="fill:#7f1d1d">💀 DLQ  (dead letters)</text>
+
+<!-- ── SAGA ROW ── -->
+<!-- Trigger label -->
+<text class="node-tag" x="30" y="254" style="fill:#b45309">payment</text>
+<text class="node-tag" x="30" y="266" style="fill:#b45309">.failed →</text>
+
+<rect id="re-saga" class="rmq-saga-exch" x="225" y="238" width="148" height="40" rx="5"/>
+<text class="node-name" x="299" y="254" style="fill:#d97706">saga_events</text>
+<text class="node-tag"  x="299" y="268" style="fill:#92400e">🔀 Exchange (fanout)</text>
+
+<rect id="rq-saga" class="rmq-saga-q" x="425" y="238" width="150" height="40" rx="5"/>
+<text class="node-name" x="500" y="254" style="fill:#d97706">inventory_saga_rollback</text>
+<text class="node-tag"  x="500" y="268" style="fill:#92400e">📦 Queue  durable</text>
+
+<!-- Rollback destination (small tag) -->
+<rect id="r-rollback" class="rollback-tag" x="625" y="242" width="140" height="32" rx="5"/>
+<text class="node-name" x="695" y="256" style="fill:#4ade80;font-size:10px">inventory-service</text>
+<text class="node-tag"  x="695" y="268" style="fill:#166534">(rollback)</text>
+
+<!-- ── PACKETS ── -->
+<circle id="rp-oc"   r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-r)"/>
+<circle id="rp-dlq"  r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-r)"/>
+<circle id="rp-saga" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-r)"/>
+</svg>
+</div><!-- /diagram-rabbit -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TAB 3 — REST / gRPC
+     Interactive: click buttons → browser fetch() → animate round-trip
+     Shows the SYNCHRONOUS call pattern:
+       [You] →request→ [order-service] →request→ [inventory-service]
+             ←response←               ←response←
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="diagram-sync" class="diagram-wrap">
+<svg viewBox="0 0 760 148" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;overflow:visible">
+<defs>
+    <marker id="sa-arr"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#1e3a55"/></marker>
+    <marker id="sa-arrL" markerWidth="7" markerHeight="5" refX="0" refY="2.5" orient="auto"><path d="M7,0 L0,2.5 L7,5 Z" fill="#1e3a55"/></marker>
+    <filter id="glow-s"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<!-- Request lane (→) -->
+<path id="sa-req-1" class="static-arrow" d="M 90,72  L 155,72"  marker-end="url(#sa-arr)"/>
+<path id="sa-req-2" class="static-arrow" d="M 315,72  L 530,72" marker-end="url(#sa-arr)"/>
+<text id="st-proto" x="422" y="64" text-anchor="middle" font-size="9" font-family="monospace" fill="#1e3050">HTTP/1.1 · JSON</text>
+<text x="122" y="64" text-anchor="middle" font-size="9" font-family="monospace" fill="#1e3050">request →</text>
+<!-- Response lane (←  dashed) -->
+<path id="sa-res-2" class="static-arrow" d="M 530,96  L 315,96" marker-end="url(#sa-arrL)" style="stroke-dasharray:5,3"/>
+<path id="sa-res-1" class="static-arrow" d="M 155,96  L 90,96"  marker-end="url(#sa-arrL)" style="stroke-dasharray:5,3"/>
+<text id="st-res-lbl" x="422" y="112" text-anchor="middle" font-size="9" font-family="monospace" fill="#0f1a30">← response</text>
+<!-- SERVICE BOXES -->
+<rect id="ss-client"    class="svc-rect" x="5"   y="48" width="85"  height="58" rx="8"/>
+<text class="svc-name"  x="47"  y="76">You</text>
+<text class="svc-port"  x="47"  y="92">fetch / curl</text>
+<rect id="ss-order"     class="svc-rect" x="155" y="36" width="160" height="78" rx="8"/>
+<text class="svc-name"  x="235" y="66">order-service</text>
+<text class="svc-port"  x="235" y="80">:3001</text>
+<!-- Circuit breaker badge (inside order box) -->
+<rect x="172" y="90" width="126" height="16" rx="3" fill="#060d1a" stroke="#0f1f35" stroke-width="1"/>
+<text id="st-cb" x="235" y="102" text-anchor="middle" font-size="9" font-family="monospace" fill="#1e3050">CB: ● CLOSED</text>
+<rect id="ss-inventory" class="svc-rect" x="530" y="36" width="190" height="78" rx="8"/>
+<text class="svc-name"  x="625" y="63">inventory-service</text>
+<text class="svc-port"  x="625" y="78">REST :3002</text>
+<text x="625" y="93" text-anchor="middle" font-size="9" font-family="monospace" fill="#1e4030">gRPC :50051</text>
+<!-- Packets -->
+<circle id="sp-req" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-s)"/>
+<circle id="sp-res" r="7" cx="-200" cy="-200" opacity="0" filter="url(#glow-s)"/>
+</svg>
+<!-- Status bar -->
+<div id="sync-status-bar"><span class="ss-lbl">Click a button below to send a request and watch the animation</span></div>
+<!-- Control buttons -->
+<div class="sync-controls">
+    <div class="ctrl-group">
+        <span class="ctrl-grp-lbl">REST — HTTP/1.1 · JSON</span>
+        <button class="ctrl-btn" onclick="runSync('rest','IPHONE-15',1)">
+            <span class="b-rest">REST</span> ✓ IPHONE-15 — thành công
+        </button>
+        <button class="ctrl-btn" onclick="runSync('rest','IPHONE-15',999)">
+            <span class="b-rest">REST</span> ✗ IPHONE-15 qty:999 — hết hàng
+        </button>
+        <button class="ctrl-btn" onclick="runSync('rest','TRIGGER-SLOW',1)">
+            <span class="b-rest">REST</span> ⏱ TRIGGER-SLOW — timeout (~9s)
+        </button>
+        <button class="ctrl-btn" onclick="runSyncCB()">
+            <span class="b-rest">REST</span> ⚡ TRIGGER-ERROR ×4 — circuit breaker
+        </button>
+    </div>
+    <div class="ctrl-group">
+        <span class="ctrl-grp-lbl">gRPC — HTTP/2 · Protobuf binary</span>
+        <button class="ctrl-btn" onclick="runSync('grpc','IPHONE-15',1)">
+            <span class="b-grpc">gRPC</span> ✓ IPHONE-15 — thành công
+        </button>
+        <button class="ctrl-btn" onclick="runSync('grpc','IPHONE-15',999)">
+            <span class="b-grpc">gRPC</span> ✗ IPHONE-15 qty:999 — hết hàng
+        </button>
+        <button class="ctrl-btn" onclick="runSync('grpc','INVALID-SKU',1)">
+            <span class="b-grpc">gRPC</span> ✗ INVALID-SKU — NOT_FOUND → 404
+        </button>
+    </div>
+</div>
+</div><!-- /diagram-sync -->
+
+</div><!-- /flow-panel -->
+
+<!-- ── Log Panel ── -->
+<div class="log-panel">
+    <div class="log-header">
+        <span>LIVE EVENT LOG</span>
+        <button onclick="clearLog()">Clear</button>
+    </div>
+    <div id="log-body" class="log-body"></div>
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-num" id="s-total"    style="color:#94a3b8">0</div>
+            <div class="stat-lbl">TOTAL</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num" id="s-success"  style="color:#22c55e">0</div>
+            <div class="stat-lbl">SUCCESS</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num" id="s-failed"   style="color:#ef4444">0</div>
+            <div class="stat-lbl">FAILED</div>
+        </div>
+        <div class="stat">
+            <div class="stat-num" id="s-rollback" style="color:#eab308">0</div>
+            <div class="stat-lbl">ROLLBACK</div>
+        </div>
+    </div>
+</div>
+</div><!-- /main -->
+
+<script>
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(tab) {
+    document.querySelectorAll('.diagram-wrap').forEach(d => d.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('diagram-' + tab).classList.add('active');
+    document.getElementById('btn-' + tab).classList.add('active');
+    if (tab === 'sync') updateCBBadge();
+}
+
+// ── Event config ───────────────────────────────────────────────────────────
+// Each event type defines:
+//   color, cls (css class), stat (which counter to increment)
+//   steps: array of animation hops
+//     Each step: { pkt, x1,y1,x2,y2 (linear) OR curve:[...8 bezier points],
+//                  arrow, hlFrom, hlTo, delay, dur }
+const EVENTS = {
+    // ── Kafka SAGA events ──────────────────────────────────────────────
+    'order.created': {
+        color: '#3b82f6', cls: 'blue', stat: 'total', src: 'kafka',
+        steps: [
+            { pkt:'kp-oc', x1:130,y1:100, x2:174,y2:100, arrow:'ka1', hlFrom:'kb-order',         delay:0   },
+            { pkt:'kp-oc', x1:284,y1:100, x2:345,y2:100, arrow:'ka2', hlFrom:'kt-order-events', hlTo:'kb-inventory', delay:530 },
+        ]
+    },
+    'inventory.reserved': {
+        color: '#22c55e', cls: 'green', stat: 'success', src: 'kafka',
+        steps: [
+            { pkt:'kp-ir', x1:485,y1:100, x2:540,y2:100, arrow:'ka3', hlFrom:'kb-inventory',    delay:0   },
+            { pkt:'kp-ir', x1:662,y1:100, x2:727,y2:100, arrow:'ka4', hlFrom:'kt-inv-events',  hlTo:'kb-payment', delay:530 },
+        ]
+    },
+    'inventory.failed': {
+        color: '#ef4444', cls: 'red', stat: 'failed', src: 'kafka',
+        steps: [
+            { pkt:'kp-if', x1:415,y1:68, x2:415,y2:16, arrow:'ka5', hlFrom:'kb-inventory', delay:0 },
+        ]
+    },
+    'payment.completed': {
+        color: '#22c55e', cls: 'green', stat: 'success', src: 'kafka',
+        steps: [
+            { pkt:'kp-pc', x1:787,y1:68, x2:787,y2:16, arrow:'ka6', hlFrom:'kb-payment', delay:0 },
+        ]
+    },
+    'payment.failed': {
+        color: '#ef4444', cls: 'red', stat: 'rollback', src: 'kafka',
+        steps: [
+            { pkt:'kp-pf', curve:[787,132,787,240,665,240,665,215], arrow:'ka7', hlFrom:'kb-payment',       delay:0   },
+            { pkt:'kp-pf', curve:[537,215,537,262,415,262,415,132], arrow:'ka8', hlFrom:'kt-pay-events', hlTo:'kb-inventory', delay:780 },
+        ]
+    },
+    // ── RabbitMQ events ────────────────────────────────────────────────
+    'rmq.order.created': {
+        color: '#3b82f6', cls: 'blue', stat: 'total', src: 'rabbitmq',
+        steps: [
+            { pkt:'rp-oc', x1:122,y1:85, x2:157,y2:85, arrow:'ra1', hlFrom:'rb-order',      delay:0   },
+            { pkt:'rp-oc', x1:302,y1:85, x2:350,y2:85, arrow:'ra2', hlFrom:'re-main',        delay:450 },
+            { pkt:'rp-oc', x1:502,y1:85, x2:548,y2:85, arrow:'ra3', hlFrom:'rq-main', hlTo:'rb-inventory', delay:900 },
+        ]
+    },
+    'rmq.order.dlq': {
+        color: '#ef4444', cls: 'red', stat: 'failed', src: 'rabbitmq',
+        steps: [
+            // nack: queue bottom → DLX top (curve)
+            { pkt:'rp-dlq', curve:[426,105,426,158,299,158,299,178], arrow:'ra4', hlFrom:'rq-main',  delay:0   },
+            { pkt:'rp-dlq', x1:373,y1:198, x2:430,y2:198,           arrow:'ra5', hlFrom:'re-dlx', hlTo:'rq-dlq', delay:660 },
+        ]
+    },
+    'rmq.saga.rollback': {
+        color: '#f59e0b', cls: 'yellow', stat: 'rollback', src: 'rabbitmq',
+        steps: [
+            { pkt:'rp-saga', x1:60, y1:258, x2:225,y2:258, arrow:'ra6',  delay:0   },
+            { pkt:'rp-saga', x1:373,y1:258, x2:425,y2:258, arrow:'ra7', hlFrom:'re-saga',  delay:450 },
+            { pkt:'rp-saga', x1:575,y1:258, x2:625,y2:258, arrow:'ra8', hlFrom:'rq-saga', hlTo:'r-rollback', delay:900 },
+        ]
+    },
+};
+
+// Arrow → marker mapping per color
+const MARKERS = {
+    '#3b82f6': { kafka: 'ka-blue',  rabbit: 'ra-blue'  },
+    '#22c55e': { kafka: 'ka-green', rabbit: 'ra-blue'  },
+    '#ef4444': { kafka: 'ka-red',   rabbit: 'ra-red'   },
+    '#f59e0b': { kafka: 'ka-red',   rabbit: 'ra-amber' },
+};
+function defaultMarker(arrowId) {
+    if (arrowId.startsWith('k')) return 'ka-arr';
+    if (arrowId.startsWith('r')) return 'ra-arr';
+    return 'sa-arr'; // sync arrows
+}
+function colorMarker(arrowId, color) {
+    const m = MARKERS[color] || {};
+    if (arrowId.startsWith('k')) return m.kafka  || 'ka-arr';
+    if (arrowId.startsWith('r')) return m.rabbit || 'ra-arr';
+    return 'sa-arr'; // sync arrows — color via stroke only
+}
+
+// ── Animation helpers ──────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function cbz(t, p0, p1, p2, p3) {
+    const u = 1 - t;
+    return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
+}
+function easeInOut(t) { return t < .5 ? 2*t*t : -1+(4-2*t)*t; }
+
+function animPkt(pktId, step, color, onDone) {
+    const pkt = document.getElementById(pktId);
+    if (!pkt) return;
+    pkt.setAttribute('fill', color);
+    pkt.setAttribute('opacity', '1');
+    const dur = step.dur || 560;
+    const t0  = performance.now();
+    function tick(now) {
+        const raw = Math.min((now - t0) / dur, 1);
+        const t   = easeInOut(raw);
+        let x, y;
+        if (step.curve) {
+            const [x1,y1,cx1,cy1,cx2,cy2,x2,y2] = step.curve;
+            x = cbz(t, x1, cx1, cx2, x2);
+            y = cbz(t, y1, cy1, cy2, y2);
+        } else {
+            x = lerp(step.x1, step.x2, t);
+            y = lerp(step.y1, step.y2, t);
+        }
+        pkt.setAttribute('cx', x);
+        pkt.setAttribute('cy', y);
+        if (raw < 1) { requestAnimationFrame(tick); }
+        else { pkt.setAttribute('opacity', '0'); if (onDone) onDone(); }
+    }
+    requestAnimationFrame(tick);
+}
+
+function highlightNode(id, color) {
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.style.stroke;
+    el.style.stroke      = color;
+    el.style.strokeWidth = '2.5';
+    el.style.filter      = 'drop-shadow(0 0 8px ' + color + ')';
+    setTimeout(() => { el.style.stroke = ''; el.style.strokeWidth = ''; el.style.filter = ''; }, 1300);
+}
+
+function flashArrow(arrowId, color) {
+    if (!arrowId) return;
+    const el = document.getElementById(arrowId);
+    if (!el) return;
+    el.style.stroke = color;
+    el.setAttribute('marker-end', 'url(#' + colorMarker(arrowId, color) + ')');
+    setTimeout(() => {
+        el.style.stroke = '';
+        el.setAttribute('marker-end', 'url(#' + defaultMarker(arrowId) + ')');
+    }, 900);
+}
+
+function fireSteps(steps, color) {
+    steps.forEach(step => {
+        setTimeout(() => {
+            flashArrow(step.arrow, color);
+            highlightNode(step.hlFrom, color);
+            animPkt(step.pkt, step, color);
+            if (step.hlTo) setTimeout(() => highlightNode(step.hlTo, color), step.dur || 560);
+        }, step.delay || 0);
+    });
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+const counts = { total: 0, success: 0, failed: 0, rollback: 0 };
+function updateStats(statKey) {
+    counts.total++;
+    if (statKey === 'success')  counts.success++;
+    if (statKey === 'failed')   { counts.failed++; }
+    if (statKey === 'rollback') { counts.failed++; counts.rollback++; }
+    document.getElementById('s-total').textContent    = counts.total;
+    document.getElementById('s-success').textContent  = counts.success;
+    document.getElementById('s-failed').textContent   = counts.failed;
+    document.getElementById('s-rollback').textContent = counts.rollback;
+}
+
+// ── Log entry ──────────────────────────────────────────────────────────────
+function addLog(event, cfg) {
+    const body    = document.getElementById('log-body');
+    const time    = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+    const orderId = (event.orderId  || '—').substring(0, 8);
+    const traceId = (event.traceId  || '—').substring(0, 8);
+    const srcLabel = event.source === 'kafka' ? 'Kafka'
+                   : event.source === 'sync'  ? 'REST/gRPC'
+                   : 'RabbitMQ';
+    const detail   = event.source === 'sync'
+        ? `${event.productId || ''}  ${event.latency}ms`
+        : `order:${orderId}… trace:${traceId}…`;
+
+    const item = document.createElement('div');
+    item.className = 'log-item ' + cfg.cls;
+    item.innerHTML =
+        '<div class="log-time">' + time + '<span class="log-src">' + srcLabel + '</span></div>' +
+        '<div class="log-type ' + cfg.cls + '">' + (event.type || event.topic || '?') + '</div>' +
+        '<div class="log-detail">' + detail + '</div>';
+    body.insertBefore(item, body.firstChild);
+    while (body.children.length > 80) body.removeChild(body.lastChild);
+}
+
+// ── Main event handler ─────────────────────────────────────────────────────
+function processEvent(event) {
+    const key = event.type;
+    const cfg = EVENTS[key];
+    if (!cfg) return;
+
+    addLog(event, cfg);
+    updateStats(cfg.stat);
+    fireSteps(cfg.steps, cfg.color);
+
+    // Auto-switch tab to show the relevant diagram
+    const targetTab = event.source === 'rabbitmq' ? 'rabbit' : 'kafka';
+    const activeBtn = document.querySelector('.tab-btn.active');
+    if (activeBtn && activeBtn.id !== 'btn-' + targetTab) {
+        // Don't auto-switch — let user stay on their chosen tab
+        // Events still animate in the hidden SVG
+    }
+}
+
+// ── Clear ──────────────────────────────────────────────────────────────────
+function clearLog() {
+    document.getElementById('log-body').innerHTML = '';
+    counts.total = counts.success = counts.failed = counts.rollback = 0;
+    ['s-total','s-success','s-failed','s-rollback'].forEach(id => {
+        document.getElementById(id).textContent = '0';
+    });
+}
+
+// ── REST / gRPC Sync Tab ───────────────────────────────────────────────────
+// Browser calls /api/orders/:route → ui-service proxies → order-service :3001
+let syncBusy = false;
+let _pulseIv  = null;
+
+function _startPulse(id, color) {
+    _stopPulse();
+    const el = document.getElementById(id);
+    if (!el) return;
+    let v = 0, d = 0.07;
+    _pulseIv = setInterval(() => {
+        v += d; if (v > 1 || v < 0) d = -d;
+        el.style.filter      = `drop-shadow(0 0 ${4 + v * 9}px ${color})`;
+        el.style.strokeWidth = (1.5 + v * 1.5).toFixed(1);
+    }, 40);
+}
+function _stopPulse() {
+    if (_pulseIv) { clearInterval(_pulseIv); _pulseIv = null; }
+    ['ss-order','ss-inventory'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.filter = ''; el.style.strokeWidth = ''; }
+    });
+}
+function _flashSyncArrow(id, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.stroke  = color;
+    el.style.opacity = '1';
+    setTimeout(() => { el.style.stroke = ''; el.style.opacity = ''; }, 1000);
+}
+function _setSyncBar(html) {
+    const el = document.getElementById('sync-status-bar');
+    if (el) el.innerHTML = html;
+}
+function _setSyncBtns(disabled) {
+    document.querySelectorAll('.ctrl-btn').forEach(b => b.disabled = disabled);
+}
+async function updateCBBadge() {
+    try {
+        const res  = await fetch('/api/circuit-status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const state = data.state || 'UNKNOWN';
+        const el    = document.getElementById('st-cb');
+        if (!el) return;
+        const clr = { CLOSED:'#22c55e', OPEN:'#ef4444', HALF_OPEN:'#f59e0b', UNKNOWN:'#475569' };
+        const ico = { CLOSED:'●', OPEN:'⊗', HALF_OPEN:'◑', UNKNOWN:'?' };
+        el.textContent = `CB: ${ico[state]||'?'} ${state}  fails:${data.failureCount??'?'}`;
+        el.style.fill  = clr[state] || '#475569';
+    } catch { /* order-service not running */ }
+}
+function runSync(proto, productId, qty) {
+    if (syncBusy) return Promise.resolve();
+    syncBusy = true;
+    _setSyncBtns(true);
+    return new Promise(async (resolve) => {
+        const isGrpc   = proto === 'grpc';
+        const color    = isGrpc ? '#7c3aed' : '#3b82f6';
+        const protoLbl = isGrpc ? 'HTTP/2 · Protobuf' : 'HTTP/1.1 · JSON';
+        const route    = isGrpc ? 'sync-grpc'
+                       : (productId.startsWith('TRIGGER') ? 'sync-resilient' : 'sync');
+        // Protocol label
+        const ptEl = document.getElementById('st-proto');
+        if (ptEl) { ptEl.textContent = protoLbl; ptEl.style.fill = color; }
+        _flashSyncArrow('sa-req-1', color);
+        _flashSyncArrow('sa-req-2', color);
+        highlightNode('ss-client', color);
+        _setSyncBar(`<span class="ss-lbl">→</span><span class="ss-val" style="color:${color}">${protoLbl}</span><span class="ss-lbl">sending</span><span class="ss-val" style="color:#64748b">${productId}</span>`);
+        // Phase 1 REQ: client → order → inventory
+        animPkt('sp-req', { x1:90, y1:72, x2:155, y2:72, dur:240 }, color, () => {
+            highlightNode('ss-order', color);
+            animPkt('sp-req', { x1:315, y1:72, x2:530, y2:72, dur:420 }, color, async () => {
+                highlightNode('ss-inventory', color);
+                document.getElementById('sp-req').setAttribute('opacity', '0');
+                _startPulse('ss-inventory', color);
+                _setSyncBar(`<span class="ss-lbl">⏳ waiting for</span><span class="ss-val" style="color:${color}">inventory-service</span><span class="ss-lbl">...</span>`);
+                // Real HTTP call (proxied)
+                const t0 = Date.now();
+                let httpStatus = 0, resData = {}, ok = false;
+                try {
+                    const res = await fetch(`/api/orders/${route}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ productId, quantity: qty }),
+                    });
+                    httpStatus = res.status;
+                    resData    = await res.json().catch(() => ({}));
+                    ok         = res.ok;
+                } catch (err) {
+                    httpStatus = 503;
+                    resData    = { error: err.message };
+                    ok         = false;
+                }
+                const latency  = Date.now() - t0;
+                const resColor = ok ? '#22c55e' : '#ef4444';
+                const latStr   = latency >= 1000 ? `${(latency / 1000).toFixed(1)}s` : `${latency}ms`;
+                _stopPulse();
+                // Phase 2 RES: inventory → order → client
+                _flashSyncArrow('sa-res-2', resColor);
+                animPkt('sp-res', { x1:530, y1:96, x2:315, y2:96, dur:360 }, resColor, () => {
+                    highlightNode('ss-order', resColor);
+                    _flashSyncArrow('sa-res-1', resColor);
+                    animPkt('sp-res', { x1:155, y1:96, x2:90, y2:96, dur:240 }, resColor, () => {
+                        highlightNode('ss-client', resColor);
+                        document.getElementById('sp-res').setAttribute('opacity', '0');
+                        syncBusy = false;
+                        _setSyncBtns(false);
+                        resolve();
+                    });
+                });
+                // Status bar
+                const msg = (resData.message || resData.error || '').substring(0, 55);
+                _setSyncBar(
+                    `<span class="ss-lbl">Protocol:</span><span class="ss-val" style="color:${color}">${protoLbl}</span>` +
+                    `<span class="ss-lbl">Status:</span><span class="ss-val" style="color:${resColor}">${httpStatus}</span>` +
+                    `<span class="ss-lbl">Latency:</span><span class="ss-val">${latStr}</span>` +
+                    (msg ? `<span class="ss-lbl">→</span><span class="ss-val" style="color:#475569">${msg}</span>` : '')
+                );
+                await updateCBBadge();
+                addLog({ source:'sync', type:`${proto.toUpperCase()} ${route} → ${httpStatus}`, productId, latency },
+                       { cls: ok ? 'green' : (httpStatus===504||httpStatus===503 ? 'yellow' : 'red') });
+                updateStats(ok ? 'success' : 'failed');
+            });
+        });
+    });
+}
+async function runSyncCB() {
+    if (syncBusy) return;
+    _setSyncBar('<span class="ss-lbl">Circuit Breaker demo — 4× TRIGGER-ERROR. Watch CB badge inside order-service box</span>');
+    for (let i = 0; i < 4; i++) {
+        await runSync('rest', 'TRIGGER-ERROR', 1);
+        await new Promise(r => setTimeout(r, 700));
+    }
+}
+
+// ── SSE connection ─────────────────────────────────────────────────────────
+(function connect() {
+    const statusEl = document.getElementById('status');
+    const es = new EventSource('/stream');
+    es.onopen = () => { statusEl.textContent = '● Connected'; statusEl.className = 'ok'; };
+    es.onmessage = ({ data }) => { try { processEvent(JSON.parse(data)); } catch {} };
+    es.onerror = () => {
+        statusEl.textContent = '● Reconnecting...';
+        statusEl.className   = '';
+        es.close();
+        setTimeout(connect, 3000);
+    };
+})();
+</script>
+</body>
+</html>

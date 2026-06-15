@@ -4,9 +4,12 @@
 // Trong thực tế, đây sẽ là dữ liệu trong Database (ví dụ Postgres/MongoDB)
 // Ta tách ra đây để dùng chung (Shared State)
 const mockInventory = {
-    'IPHONE-15': { stock: 10, reserved: 0 },
-    'MACBOOK-M3': { stock: 5, reserved: 0 },
-    'LAPTOP-MODULAR-TEST': { stock: 100, reserved: 0 }
+    'IPHONE-15':           { stock: 10,  reserved: 0 },
+    'MACBOOK-M3':          { stock: 5,   reserved: 0 },
+    'LAPTOP-MODULAR-TEST': { stock: 100, reserved: 0 },
+    // FAIL-PAYMENT: có hàng để inventory RESERVE được,
+    // nhưng payment-service sẽ từ chối thanh toán → trigger SAGA rollback
+    'FAIL-PAYMENT':        { stock: 99,  reserved: 0 },
 };
 
 module.exports = mockInventory;
