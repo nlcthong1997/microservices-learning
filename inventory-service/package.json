@@ -5,6 +5,7 @@
     "amqplib": "^2.0.1",
     "express": "^5.2.1",
     "kafkajs": "^2.2.4",
+    "pg": "^8.13.3",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
     "winston-loki": "^6.1.4"

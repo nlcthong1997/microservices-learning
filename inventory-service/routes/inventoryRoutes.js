@@ -8,7 +8,7 @@ const { checkStock } = require('../services/inventoryService');
 // =========================================================================
 // ROUTE CHÍNH — check kho (HTTP Sync)
 // =========================================================================
-router.get('/:productId', (req, res) => {
+router.get('/:productId', async (req, res) => {
     const traceId = req.headers['x-trace-id'] || 'SYSTEM-GEN';
     const { productId } = req.params;
 
@@ -63,7 +63,7 @@ router.get('/:productId', (req, res) => {
         message: `[HTTP Sync] Check stock request: ${productId}.`
     });
 
-    const result = checkStock(productId, 1);
+    const result = await checkStock(productId, 1);
 
     if (!result.found) {
         logger.warn({ trace_id: traceId, message: `[HTTP Sync] Product ${productId} not found.` });

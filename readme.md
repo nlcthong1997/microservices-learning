@@ -6,7 +6,7 @@ Dự án học microservice thực chiến — xây dựng từng giai đoạn, 
 
 ## Mục lục
 
-1. [Tổng quan dự án](#1-tổng-quan-dự-án)
+1. [Tổng quan & Mục tiêu học](#1-tổng-quan--mục-tiêu-học)
 2. [Tại sao cần microservice?](#2-tại-sao-cần-microservice)
 3. [Kiến trúc hệ thống](#3-kiến-trúc-hệ-thống)
 4. [Cấu trúc thư mục](#4-cấu-trúc-thư-mục)
@@ -15,21 +15,447 @@ Dự án học microservice thực chiến — xây dựng từng giai đoạn, 
 7. [Giai đoạn 2 — HTTP Resilience](#7-giai-đoạn-2--http-resilience)
 8. [Giai đoạn 3 — RabbitMQ Async](#8-giai-đoạn-3--rabbitmq-async)
 9. [Giai đoạn 4 — Distributed Tracing & Logging](#9-giai-đoạn-4--distributed-tracing--logging)
-10. [Giai đoạn 5 — Kafka Stream](#10-giai-đoạn-5--kafka-stream)
+10. [Giai đoạn 5 — Kafka Stream & Consumer Groups](#10-giai-đoạn-5--kafka-stream--consumer-groups)
 11. [Giai đoạn 6 — gRPC](#11-giai-đoạn-6--grpc)
-12. [Thuật ngữ](#12-thuật-ngữ)
-13. [Dashboard & Monitoring](#13-dashboard--monitoring)
-14. [Chạy dự án & Test chi tiết](#14-chạy-dự-án--test-chi-tiết)
-    - Test 1: Health check
-    - Test 2: HTTP Sync cơ bản
-    - Test 3: Timeout
-    - Test 4: Retry + Circuit Breaker
-    - Test 5: RabbitMQ Async + DLX
-    - Test 6: Kafka Stream
-    - Test 7: gRPC
-    - Test 8: Distributed Tracing
-    - **Test 9: Kafka SAGA (happy path / inventory fail / payment fail + rollback)**
-    - **Test 10: Visual Live Dashboard (SSE)**
+12. [Giai đoạn 7 — Kafka Choreography SAGA](#12-giai-đoạn-7--kafka-choreography-saga)
+13. [Giai đoạn 8 — PostgreSQL (Database per Service)](#13-giai-đoạn-8--postgresql-database-per-service)
+14. [Visual Live Dashboard](#14-visual-live-dashboard)
+15. [Thuật ngữ](#15-thuật-ngữ)
+
+> **Hướng dẫn chạy & test chi tiết** → xem [setup_test.md](setup_test.md)
+
+---
+
+## 1. Tổng quan & Mục tiêu học
+
+Dự án mô phỏng hệ thống **đặt hàng e-commerce** với nhiều service giao tiếp nhau theo các cách khác nhau — từ HTTP đơn giản đến event streaming phức tạp.
+
+**Luồng nghiệp vụ:**
+```
+User đặt hàng → check kho → reserve stock → thanh toán → confirm hoặc rollback
+```
+
+**Sau khi hoàn thành dự án bạn hiểu được:**
+
+| Kỹ năng | Giai đoạn |
+|---|---|
+| Tại sao microservice cần resilience (timeout, retry, circuit breaker) | GĐ 1-2 |
+| Fire-and-forget với message queue, trade-off eventual consistency | GĐ 3 |
+| Theo dõi 1 request xuyên nhiều service bằng trace ID | GĐ 4 |
+| Kafka vs RabbitMQ — khi nào dùng cái nào | GĐ 3, 5 |
+| gRPC vs REST — binary protocol, type safety, HTTP/2 | GĐ 6 |
+| SAGA pattern — distributed transaction không cần 2PC | GĐ 7 |
+| Database per Service — row-level lock, SELECT FOR UPDATE | GĐ 8 |
+| Consumer Groups — fan-out, offset, fault isolation | GĐ 5 |
+
+**Điều thú vị không phải ở nghiệp vụ, mà ở cách các bước giao tiếp với nhau.** Cùng một luồng có thể implement theo nhiều cách với trade-off hoàn toàn khác nhau — dự án này demo tất cả để bạn thấy sự khác biệt thực tế.
+
+---
+
+## 2. Tại sao cần microservice?
+
+### Vấn đề của Monolith khi hệ thống lớn lên
+
+| Vấn đề | Biểu hiện |
+|---|---|
+| **Deploy chậm** | Sửa 1 dòng email template → phải deploy lại toàn bộ hệ thống → downtime |
+| **Scale không linh hoạt** | Analytics cần CPU nhiều → phải scale cả monolith lên → lãng phí |
+| **Team đụng code** | Team A sửa order, team B sửa payment → conflict liên tục |
+| **Lỗi lan rộng** | Bug trong analytics → có thể crash cả hệ thống đặt hàng |
+| **Tech lock-in** | Muốn dùng Python cho ML → không được, toàn bộ đang là Node.js |
+
+### Microservice giải quyết như thế nào
+
+Tách thành các service độc lập — deploy riêng, scale riêng, team riêng, tech stack riêng.
+
+**Nhưng microservice không phải là silver bullet.** Nó giải quyết vấn đề coupling nhưng tạo ra vấn đề mới: **các service giao tiếp qua mạng — và mạng không đáng tin cậy.**
+
+> Đây chính là lý do mọi thứ trong dự án này tồn tại: timeout, retry, circuit breaker, message queue, distributed tracing, SAGA — tất cả là để đối phó với giao tiếp qua mạng.
+
+---
+
+## 3. Kiến trúc hệ thống
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    order-service (:3001)                      │
+│                                                               │
+│  POST /orders/sync           → HTTP trực tiếp (cơ bản)       │
+│  POST /orders/sync-resilient → HTTP + Timeout + Retry + CB    │
+│  POST /orders/sync-grpc      → gRPC binary call               │
+│  POST /orders/async          → Publish RabbitMQ               │
+│  POST /orders/stream         → Publish Kafka (analytics)      │
+│  POST /orders/kafka-saga     → Kafka Choreography SAGA        │
+│  GET  /orders/circuit-status → Trạng thái circuit breaker     │
+└──────┬──────────────────────────────────┬────────────────────┘
+       │ HTTP REST / gRPC                  │ Publish events
+       ▼                                   ▼
+┌──────────────────┐     ┌─────────────────────────────────────┐
+│ inventory-service│     │ RabbitMQ          Kafka              │
+│  :3002 REST      │     │ order_events      order-events       │
+│  :50051 gRPC     │     │ saga_events       inventory-events   │
+│  PostgreSQL DB   │     │ order_events_dlx  payment-events     │
+└──────────────────┘     │                  user-behavior-logs  │
+                         └────────────┬────────────────────────┘
+                                      │ consume
+                              ┌───────┴────────┐
+                    payment-service (:3003)  analytics-service (:3005)
+                    inventory-service        ui-service (:3004)
+
+Observability:
+  Winston → Loki (:3100) → Grafana (:3000)
+  RabbitMQ Management (:15672)
+  Kafka UI (:8080)
+  ui-service (:3004) — Visual Live Dashboard
+```
+
+**Tại sao order-service dùng HTTP client (axios) để gọi inventory-service?**
+
+Vì hai service là hai process riêng biệt trên mạng — không thể `require()` code của nhau như trong monolith. Muốn lấy dữ liệu → phải gọi qua mạng → cần HTTP client.
+
+| | Express | Axios |
+|---|---|---|
+| Vai trò | Lắng nghe request đến | Gửi request đi service khác |
+| Hướng traffic | Client → Service | Service → Service khác |
+
+---
+
+## 4. Cấu trúc thư mục
+
+```
+microservice-learning-2026/
+├── docker-compose.yml          ← Toàn bộ hạ tầng
+├── loki-config.yaml
+├── setup_test.md               ← Hướng dẫn chạy & test chi tiết
+├── proto/
+│   └── inventory.proto         ← "Hợp đồng" gRPC
+├── order-service/
+│   ├── config/
+│   │   ├── httpClient.js       ← Axios + timeout + retry
+│   │   ├── circuitBreaker.js   ← Circuit breaker pattern
+│   │   ├── kafka.js
+│   │   ├── rabbit.js
+│   │   └── grpcClient.js       ← gRPC stub → inventory:50051
+│   └── routes/orderRoutes.js   ← Tất cả route /orders/*
+├── inventory-service/
+│   ├── config/
+│   │   ├── db.js               ← PostgreSQL connection pool
+│   │   └── grpcServer.js       ← gRPC server :50051
+│   ├── db/
+│   │   └── init.sql            ← Schema + seed data (auto-run on first start)
+│   ├── services/
+│   │   └── inventoryService.js ← Business logic: checkStock, reserveStock, ...
+│   └── routes/inventoryRoutes.js
+├── payment-service/            ← Consume inventory-events → publish payment-events
+├── analytics-service/          ← Consumer group demo, groupId: analytics-group
+└── ui-service/
+    ├── server.js               ← SSE + Kafka consumer + RabbitMQ observer
+    └── public/index.html       ← 4-tab animated dashboard
+```
+
+**Tại sao có `services/` layer?**
+
+Khi thêm gRPC, logic check kho phải dùng ở 2 chỗ (REST handler và gRPC handler). Service layer tránh duplicate:
+
+```
+inventoryService.js  ← business logic, 1 nguồn sự thật
+       ├── inventoryRoutes.js  (REST :3002)
+       └── grpcServer.js       (gRPC :50051)
+```
+
+---
+
+## 5. Hạ tầng — Docker Compose
+
+```bash
+docker compose up -d
+```
+
+| Container | URL | Mục đích |
+|---|---|---|
+| RabbitMQ broker | `amqp://localhost:5672` | Message broker |
+| RabbitMQ UI | http://localhost:15672 (guest/guest) | Xem queue, exchange, message rate |
+| Kafka | `localhost:9092` | Event streaming |
+| Kafka UI | http://localhost:8080 | Xem topic, consumer group, offset, lag |
+| Loki | `http://localhost:3100` | Thu thập log |
+| Grafana | http://localhost:3000 (admin/admin) | Query log theo traceId |
+| PostgreSQL | `localhost:5432` | DB của inventory-service |
+
+---
+
+## 6. Giai đoạn 1 — HTTP Sync cơ bản
+
+**Mục tiêu:** Hiểu giao tiếp đồng bộ giữa service và vấn đề của nó.
+
+```
+POST /orders/sync
+order-service → [chờ] → inventory-service → [chờ] → trả kết quả
+```
+
+**Vấn đề:** Không có timeout — nếu inventory-service không phản hồi, request treo mãi. 1000 user đồng thời = 1000 connection treo trong memory → order-service crash. Đây là code đúng về logic nhưng không dùng được production.
+
+---
+
+## 7. Giai đoạn 2 — HTTP Resilience
+
+**Mục tiêu:** Hiểu 3 lớp bảo vệ và lý do cần cả 3.
+
+```
+Request → [Circuit Breaker] → [Retry] → [Timeout] → inventory-service
+```
+
+### Timeout
+
+Sau 3 giây không nhận response → hủy request. Tránh treo connection vô thời hạn.
+
+### Retry với Exponential Backoff
+
+Thử lại khi gặp lỗi tạm thời, chờ tăng dần (200ms → 400ms → 800ms).
+
+Chỉ retry lỗi 5xx/timeout — **không retry lỗi 4xx** (400 Bad Request, 404 Not Found) vì retry không thay đổi được data sai hoặc resource không tồn tại.
+
+### Circuit Breaker
+
+Sau 3 lỗi liên tiếp → chuyển OPEN → fail fast (< 1ms) không chờ timeout. Sau 10 giây → HALF_OPEN → thử lại 1 request → nếu thành công → về CLOSED.
+
+```
+CLOSED ──[3 lỗi]──► OPEN ──[10s]──► HALF_OPEN ──[1 OK]──► CLOSED
+```
+
+**Tại sao chỉ retry chưa đủ?** Nếu service down hoàn toàn, mỗi request mất 9 giây (3 retry × 3s). 500 user đồng thời = order-service tắc nghẽn. Circuit Breaker ngăn điều này bằng cách fail ngay.
+
+**Lưu ý production:** State circuit breaker lưu in-memory — 3 instance order-service sẽ có 3 circuit riêng. Production cần lưu vào Redis.
+
+---
+
+## 8. Giai đoạn 3 — RabbitMQ Async
+
+**Mục tiêu:** Hiểu fire-and-forget pattern và trade-off eventual consistency.
+
+```
+POST /orders/async
+order-service → publish (5ms) → RabbitMQ → [ngầm] → inventory-service
+             ↓
+         202 Accepted NGAY
+```
+
+**Tại sao 202 chứ không phải 200?** Honest với client: đã nhận đơn, đang xử lý — nhưng kết quả chưa có ngay. 200 OK có nghĩa xử lý xong hoàn toàn.
+
+**Đảm bảo không mất message (Ack):** Consumer xử lý xong mới `ack()`. Nếu crash giữa chừng → RabbitMQ redeliver sau khi restart.
+
+**Dead Letter Exchange (DLX):** Message bị `nack()` hoặc hết TTL → route vào DLQ thay vì mất hoàn toàn. Dùng để debug và retry có kiểm soát.
+
+**Trade-off: Eventual Consistency.** 100 user gọi đồng thời, tất cả thấy "nhận đơn" — nhưng chỉ 10 cái có hàng. 90 đơn bị cancel sau. Amazon, Shopee đều làm vậy. Đây là đánh đổi tốc độ lấy tính nhất quán tức thì.
+
+**Kiến trúc RabbitMQ:**
+```
+order-service → order_events (fanout) → inventory_queue → inventory-service
+                                      → ui_observer_queue → ui-service (xem thôi)
+inventory-service (nack) → order_events_dlx → order_dlq
+saga rollback → saga_events (fanout) → inventory-service (hoàn kho)
+```
+
+---
+
+## 9. Giai đoạn 4 — Distributed Tracing & Logging
+
+**Mục tiêu:** Theo dõi 1 request xuyên nhiều service bằng trace ID.
+
+**Vấn đề:** Trong monolith, lỗi → tìm log trong 1 file. Trong microservice, 1 request đi qua 3 service — log ở 3 nơi. Làm sao biết 3 dòng log này cùng 1 request?
+
+**Giải pháp:** Mỗi request được gán UUID duy nhất, truyền qua tất cả service qua HTTP header và message header.
+
+```
+[order-service]     trace_id=a7f3  "Nhận đặt hàng IPHONE-15"
+[order-service]     trace_id=a7f3  "Đã publish RabbitMQ"
+[inventory-service] trace_id=a7f3  "Check kho — còn 5 cái"
+[inventory-service] trace_id=a7f3  "Trừ kho IPHONE-15"
+```
+
+Query Grafana để xem toàn bộ hành trình:
+```
+{app=~"order-service|inventory-service|payment-service"} | json | trace_id="a7f3..."
+```
+
+**Stack:** `Winston (JSON format) → winston-loki → Loki → Grafana`
+
+Dùng JSON format vì dễ filter theo bất kỳ field nào, dễ aggregate — khác với text log phải parse thủ công.
+
+---
+
+## 10. Giai đoạn 5 — Kafka Stream & Consumer Groups
+
+**Mục tiêu:** Hiểu event streaming và tại sao nhiều consumer group có thể đọc cùng 1 topic độc lập.
+
+**Kafka dùng để làm gì trong project này?** Ghi lại **hành vi user** cho analytics — không phải xử lý đơn hàng (việc đó của RabbitMQ).
+
+**Tại sao Kafka cho analytics, không phải RabbitMQ?**
+
+| Yêu cầu | RabbitMQ | Kafka |
+|---|---|---|
+| 5 team đọc cùng data | ❌ Message chỉ đến 1 consumer | ✅ Nhiều consumer group độc lập |
+| Replay 7 ngày để re-train ML | ❌ Message mất sau khi ack | ✅ Giữ theo retention |
+| 10 triệu event/ngày | Được | ✅ Thiết kế cho throughput cao |
+
+**Consumer Groups:** Mỗi group giữ **offset riêng** — vị trí đã đọc đến đâu trong topic. Group A crash → Group B không bị ảnh hưởng. Group A restart → tự replay từ offset đã commit, không mất message.
+
+```
+user-behavior-logs (topic)
+    ├──→ analytics-group  → analytics-service :3005  (offset riêng)
+    └──→ ui-service-group → ui-service :3004          (offset riêng)
+```
+
+**Nguyên tắc chọn:**
+- **RabbitMQ** → gửi **command** ("hãy trừ kho") — xử lý chính xác 1 lần
+- **Kafka** → ghi nhận **event** ("đã có người mua") — nhiều hệ thống phản ứng độc lập
+
+---
+
+## 11. Giai đoạn 6 — gRPC
+
+**Mục tiêu:** Hiểu binary protocol và khi nào gRPC tốt hơn REST.
+
+```
+REST:  HTTP/1.1 text  → {"productId":"IPHONE-15","quantity":1}  (~200 bytes)
+gRPC:  HTTP/2 binary  → <protobuf bytes>                        (~30 bytes)
+```
+
+**Cơ chế:** File `.proto` là nguồn sự thật duy nhất. Framework tự generate serialize/deserialize — không parse JSON thủ công, IDE biết type của từng field.
+
+**Tại sao inventory-service có 2 server?**
+```
+:3002  Express (HTTP/1.1) → browser, curl, Postman, external clients
+:50051 gRPC   (HTTP/2)   → internal service-to-service calls
+```
+
+**Khi nào dùng gRPC:**
+- ✅ Service-to-service nội bộ, cần type safety, high-throughput
+- ✅ Bi-directional streaming (REST không làm được)
+- ❌ Public API (browser không hỗ trợ gRPC trực tiếp)
+- ❌ Cần human-readable request/response để debug dễ
+
+---
+
+## 12. Giai đoạn 7 — Kafka Choreography SAGA
+
+**Mục tiêu:** Hiểu cách xử lý distributed transaction mà không cần 2-phase commit.
+
+**Vấn đề:** 3 service cần phối hợp — reserve kho, charge card, confirm. Nếu payment fail sau khi đã reserve kho → phải rollback kho. Không có distributed transaction → cần SAGA.
+
+**Luồng SAGA:**
+```
+order-service → [order-events] → inventory-service (reserve stock)
+                                       ↓
+                               [inventory-events] → payment-service (charge)
+                                                         ↓ (success)
+                                                   [payment-events] → inventory-service (confirm)
+                                                         ↓ (fail)
+                                                   [payment-events] → inventory-service (ROLLBACK)
+```
+
+**Choreography** (dùng trong project) vs **Orchestration:**
+- **Choreography:** Mỗi service tự lắng nghe event và quyết định hành động. Không có điểm điều phối trung tâm.
+- **Orchestration:** Một service "chỉ huy" (saga orchestrator) gọi lần lượt từng service.
+
+**Compensating transaction:** Khi payment fail, inventory-service không "undo" transaction — nó chạy một transaction **ngược lại** (release reserve). Đây là bản chất của SAGA.
+
+**FAIL-PAYMENT product** (stock=99) dùng để demo: inventory reserve thành công → payment từ chối → rollback. Nếu không có stock thì SAGA dừng sớm ở bước 1, không bao giờ đến payment.
+
+---
+
+## 13. Giai đoạn 8 — PostgreSQL (Database per Service)
+
+**Mục tiêu:** Hiểu Database per Service pattern và cách tránh race condition với row-level lock.
+
+**Database per Service:** Mỗi service sở hữu DB riêng — không service nào khác được kết nối trực tiếp. Giao tiếp qua API, không qua shared DB.
+
+**SELECT FOR UPDATE — tại sao cần?**
+
+```
+Không có lock:
+  Request A đọc: stock=10, reserved=0 → OK
+  Request B đọc: stock=10, reserved=0 → OK  (đọc cùng lúc trước A commit)
+  Request A ghi: reserved=1
+  Request B ghi: reserved=1  ← cả 2 reserve 1 cái, nhưng thực tế chỉ còn 1 chỗ
+
+Với SELECT FOR UPDATE:
+  Request A lock row → Request B chờ
+  A xong → B thấy reserved=1 → kiểm tra lại đúng
+```
+
+Lock chỉ giữ trong transaction (vài ms) — không phải lock cả bảng. Timeout tự động.
+
+**Quan trọng:** Không gọi API bên ngoài (Stripe, email) trong khi đang giữ lock. Transaction phải càng ngắn càng tốt.
+
+---
+
+## 14. Visual Live Dashboard
+
+Mở `http://localhost:3004` — 4 tabs:
+
+| Tab | Nội dung | Học gì |
+|---|---|---|
+| ⚡ Kafka SAGA | Packet animation qua 3 topics | Thấy luồng SAGA end-to-end |
+| 🐰 RabbitMQ | Exchange/Queue/DLX topology | Thấy fanout, DLQ routing |
+| 🔗 REST/gRPC | Side-by-side packet inspector | So sánh JSON bytes vs Protobuf binary |
+| 📊 Consumer Groups | Offset tracker + crash demo | Thấy fault isolation giữa 2 groups |
+
+**Cơ chế SSE (Server-Sent Events):**
+Browser mở 1 HTTP connection duy nhất tới `/stream` và giữ mãi. Server push data bất cứ lúc nào có event — không phải polling.
+
+```
+Browser ──GET /stream──► ui-service (giữ connection)
+         ◄── data: {...}  khi Kafka/RabbitMQ có event
+```
+
+RabbitMQ observer dùng **exclusive queue** (tự xóa khi disconnect) — copy message để visualize, không tranh với inventory-service.
+
+---
+
+## 15. Thuật ngữ
+
+| Thuật ngữ | Định nghĩa |
+|---|---|
+| **Microservice** | Kiến trúc chia ứng dụng thành các service nhỏ, độc lập, deploy riêng |
+| **Monolith** | Toàn bộ ứng dụng trong một codebase, deploy cùng nhau |
+| **HTTP Sync** | Giao tiếp đồng bộ — gọi và chờ kết quả |
+| **Async** | Giao tiếp bất đồng bộ — gửi đi không chờ, xử lý ngầm |
+| **Message Broker** | Trung gian nhận/gửi message (RabbitMQ) |
+| **Event Streaming** | Luồng sự kiện, nhiều consumer đọc độc lập (Kafka) |
+| **Producer / Consumer** | Bên gửi / bên nhận message |
+| **Exchange** | Bộ định tuyến RabbitMQ — nhận message và chuyển vào queue theo rules |
+| **Fanout Exchange** | Exchange gửi message đến TẤT CẢ queue đang bind |
+| **Queue** | Hàng đợi lưu message chờ consumer xử lý |
+| **Durable** | Queue/Exchange tồn tại sau khi RabbitMQ restart |
+| **Ack / Nack** | Xác nhận xử lý xong / từ chối message |
+| **DLX / DLQ** | Dead Letter Exchange/Queue — nơi nhận message bị từ chối hoặc hết hạn |
+| **Topic / Partition / Offset** | Kênh / phân mảnh / vị trí message trong Kafka |
+| **Consumer Group** | Nhóm consumer Kafka cùng groupId, giữ offset riêng |
+| **Lag** | Số message trong topic chưa được consumer group đọc |
+| **Retention** | Thời gian Kafka giữ message trước khi xóa |
+| **Timeout** | Giới hạn thời gian chờ, hủy request nếu quá lâu |
+| **Retry** | Thử lại khi gặp lỗi tạm thời |
+| **Exponential Backoff** | Thời gian chờ giữa các lần retry tăng dần |
+| **Circuit Breaker** | Ngắt kết nối đến service lỗi để tránh cascade failure |
+| **CLOSED / OPEN / HALF_OPEN** | 3 trạng thái của circuit breaker |
+| **Cascade Failure** | Lỗi lan từ service này sang service khác |
+| **Idempotency** | Xử lý cùng message nhiều lần cho kết quả giống nhau |
+| **Trace ID** | UUID gắn vào request, truyền xuyên suốt các service để correlate log |
+| **Distributed Tracing** | Theo dõi luồng 1 request qua nhiều service |
+| **Eventual Consistency** | Tính nhất quán đạt được sau một khoảng thời gian, không nhất thiết tức thì |
+| **SAGA Pattern** | Chuỗi transaction phân tán, mỗi bước có compensating transaction để rollback |
+| **Choreography SAGA** | Các service tự phối hợp qua events, không có orchestrator |
+| **Compensating Transaction** | Transaction chạy ngược để undo hành động trước đó |
+| **202 Accepted** | HTTP status — đã nhận, đang xử lý, chưa có kết quả |
+| **503 Service Unavailable** | Service tạm thời không khả dụng |
+| **504 Gateway Timeout** | Service không phản hồi trong thời gian chờ |
+| **gRPC** | Remote Procedure Call — gọi hàm service khác như gọi hàm local, dùng HTTP/2 + Protobuf |
+| **Protobuf** | Protocol Buffers — định dạng binary nhỏ và nhanh hơn JSON |
+| **.proto file** | File định nghĩa "hợp đồng" gRPC: service, RPC methods, message types |
+| **Database per Service** | Mỗi service sở hữu DB riêng, không service nào khác truy cập trực tiếp |
+| **SELECT FOR UPDATE** | Lock row trong transaction — tránh race condition khi nhiều request cùng update |
+| **SSE (Server-Sent Events)** | Cơ chế server push data về browser qua 1 HTTP connection dài |
+
 
 ---
 

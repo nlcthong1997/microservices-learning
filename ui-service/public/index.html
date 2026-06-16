@@ -94,6 +94,51 @@ header h1 { font-size: 12px; color: #64748b; letter-spacing:.05em; }
 .b-grpc { background: #180a30; color: #a78bfa; font-size: 9px; padding: 1px 5px; border-radius: 3px; border: 1px solid #3b1e7f; flex-shrink:0; }
 #sync-status-bar { margin-top: 8px; background: #0b1220; border: 1px solid #1e293b; border-radius: 5px; padding: 7px 12px; font-size: 10px; display: flex; gap: 12px; align-items: center; min-height: 32px; flex-wrap: wrap; }
 .ss-lbl { color: #1e3550; } .ss-val { font-weight: bold; }
+/* ── Consumer Groups tab ── */
+.kafka-group-a { fill: #061a18; stroke: #0d9488; stroke-width: 1.5; }
+.kafka-group-u { fill: #0e0a1e; stroke: #7c3aed; stroke-width: 1.5; }
+.rmq-split-q   { fill: #130808; stroke: #7f1d1d; stroke-width: 1; stroke-dasharray: 4,2; }
+.gc-teal   { fill: #2dd4bf; font-size: 22px; font-weight: bold; font-family: monospace; text-anchor: middle; }
+.gc-purple { fill: #a78bfa; font-size: 22px; font-weight: bold; font-family: monospace; text-anchor: middle; }
+.gc-sub    { font-size: 9px; font-family: monospace; text-anchor: middle; fill: #334155; }
+.vs-label  { fill: #1e293b; font-size: 11px; font-family: monospace; font-weight: bold; text-anchor: middle; }
+.group-send-btn { display:block; margin: 10px auto 0; background: #0d2a0d; border: 1px solid #166534; color: #4ade80; font-size: 11px; padding: 7px 22px; border-radius: 5px; cursor: pointer; font-family: monospace; transition: all .15s; }
+.group-send-btn:hover:not(:disabled) { background: #14401b; border-color: #22c55e; }
+.group-send-btn:disabled { opacity: .4; cursor: not-allowed; }
+#group-hint { text-align:center; font-size: 10px; color: #1e3550; margin-top: 6px; height: 16px; }
+/* ── Packet Inspector (Tab 3) ── */
+.pkt-inspector { display:flex; gap:10px; margin:10px 0 0; font-family:monospace; }
+.pi-col { flex:1; background:#060d1a; border-radius:8px; overflow:hidden; }
+.pi-col.rest { border:1px solid #1e3a5f; } .pi-col.grpc { border:1px solid #3b1e7f; }
+.pi-hdr { padding:6px 12px; font-size:10px; font-weight:bold; letter-spacing:.5px; }
+.pi-hdr.rest { background:#0a1830; color:#60a5fa; border-bottom:1px solid #1e3a5f; }
+.pi-hdr.grpc { background:#180a30; color:#a78bfa; border-bottom:1px solid #3b1e7f; }
+.pi-body { padding:9px 12px; font-size:9px; line-height:1.65; white-space:pre-wrap; margin:0; color:#475569; }
+.pi-body .hi { color:#94a3b8; } .pi-body .dim { color:#2d4060; }
+.pi-body .cyan { color:#22d3ee; } .pi-body .amber { color:#f59e0b; }
+.pi-diff { margin-top:8px; padding:8px 12px; background:#060d1a; border:1px solid #1e2a40; border-radius:6px; font-size:9px; }
+.pi-diff table { width:100%; border-collapse:collapse; }
+.pi-diff td { padding:3px 8px; border-bottom:1px solid #0f1a2e; }
+.pi-diff td:first-child { color:#475569; }
+.pi-diff .rv { color:#60a5fa; } .pi-diff .gv { color:#a78bfa; }
+/* ── Consumer Groups — offset cards + crash demo ── */
+.offset-row { display:flex; gap:10px; margin:8px 0; font-family:monospace; }
+.oc { flex:1; padding:8px 12px; border-radius:8px; background:#060d1a; transition:all .3s; }
+.oc.teal { border:1px solid #0d9488; } .oc.purple { border:1px solid #7c3aed; }
+.oc-title { font-size:10px; font-weight:bold; margin-bottom:4px; }
+.oc.teal .oc-title { color:#5eead4; } .oc.purple .oc-title { color:#c4b5fd; }
+.oc-row { display:flex; justify-content:space-between; padding:2px 0; font-size:9px; color:#334155; }
+.oc-row span.v { color:#94a3b8; }
+.oc.crashed { border-color:#7f1d1d!important; opacity:.6; }
+.oc.crashed .oc-title { color:#ef4444!important; }
+.oc-status { font-size:9px; margin-top:4px; padding-top:3px; border-top:1px solid #1e2a40; }
+.oc.teal .oc-status { color:#0d9488; } .oc.purple .oc-status { color:#7c3aed; }
+.oc.crashed .oc-status { color:#ef4444!important; }
+.crash-row { display:flex; gap:8px; margin:6px 0; }
+.crash-btn { flex:1; padding:5px 8px; font-size:9.5px; font-family:monospace; border-radius:5px; cursor:pointer; border:1px solid; background:transparent; transition:all .15s; }
+.crash-btn.teal { color:#0d9488; border-color:#0d9488; } .crash-btn.teal:hover { background:#0d948818; }
+.crash-btn.purple { color:#7c3aed; border-color:#7c3aed; } .crash-btn.purple:hover { background:#7c3aed18; }
+.crash-note { font-size:9px; font-family:monospace; text-align:center; color:#475569; min-height:14px; margin:2px 0 4px; }
 </style>
 </head>
 <body>
@@ -104,6 +149,7 @@ header h1 { font-size: 12px; color: #64748b; letter-spacing:.05em; }
         <button id="btn-kafka"  class="tab-btn active"  onclick="switchTab('kafka')">⚡ Kafka SAGA</button>
         <button id="btn-rabbit" class="tab-btn"         onclick="switchTab('rabbit')">🐰 RabbitMQ</button>
         <button id="btn-sync"   class="tab-btn"         onclick="switchTab('sync')">🔗 REST / gRPC</button>
+        <button id="btn-groups" class="tab-btn"         onclick="switchTab('groups')">📊 Consumer Groups</button>
     </nav>
     <span id="status">● Connecting...</span>
 </header>
@@ -318,6 +364,20 @@ header h1 { font-size: 12px; color: #64748b; letter-spacing:.05em; }
 </svg>
 <!-- Status bar -->
 <div id="sync-status-bar"><span class="ss-lbl">Click a button below to send a request and watch the animation</span></div>
+<!-- Packet Inspector — hiện sau mỗi lần call, so sánh REST vs gRPC side-by-side -->
+<div id="packet-inspector" style="display:none">
+    <div class="pkt-inspector">
+        <div class="pi-col rest">
+            <div class="pi-hdr rest">REST · HTTP/1.1 · JSON</div>
+            <pre id="pi-rest-body" class="pi-body"></pre>
+        </div>
+        <div class="pi-col grpc">
+            <div class="pi-hdr grpc">gRPC · HTTP/2 · Protobuf binary</div>
+            <pre id="pi-grpc-body" class="pi-body"></pre>
+        </div>
+    </div>
+    <div class="pi-diff"><table id="pi-table"></table></div>
+</div>
 <!-- Control buttons -->
 <div class="sync-controls">
     <div class="ctrl-group">
@@ -349,6 +409,140 @@ header h1 { font-size: 12px; color: #64748b; letter-spacing:.05em; }
     </div>
 </div>
 </div><!-- /diagram-sync -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     TAB 4 — KAFKA CONSUMER GROUPS
+     Mục tiêu: thấy 1 message → 2 group nhận cùng lúc (không tranh nhau)
+     So sánh trực quan với RabbitMQ queue (messages bị chia đôi)
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="diagram-groups" class="diagram-wrap">
+
+<!-- ── PHẦN 1: Kafka fan-out (có animation) ── -->
+<svg viewBox="0 0 600 210" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:680px;height:auto;display:block;margin:0 auto;overflow:visible">
+<defs>
+    <marker id="ga-arr"   markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#1e3a55"/></marker>
+    <marker id="ga-teal"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#0d9488"/></marker>
+    <marker id="ga-purp"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#7c3aed"/></marker>
+    <filter id="glow-g"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+
+<!-- Title -->
+<text x="300" y="18" text-anchor="middle" font-size="11" font-family="monospace" fill="#22c55e" font-weight="bold">✅ Kafka — 1 message gửi đến TẤT CẢ consumer groups</text>
+
+<!-- ARROWS (static) -->
+<path id="ga1" class="static-arrow" d="M 145,78 L 195,78" marker-end="url(#ga-arr)"/>
+<text class="arrow-lbl" x="170" y="70">pub</text>
+<!-- Topic → analytics (curve down-left) -->
+<path id="ga2" class="static-arrow" d="M 267,108 C 267,140 155,140 155,152" marker-end="url(#ga-arr)"/>
+<!-- Topic → ui-service (curve down-right) -->
+<path id="ga3" class="static-arrow" d="M 287,108 C 287,140 435,140 435,152" marker-end="url(#ga-arr)"/>
+<text class="arrow-lbl" x="195" y="138">fan-out</text>
+<text class="arrow-lbl" x="380" y="138">fan-out</text>
+
+<!-- order-service box -->
+<rect id="gg-order" class="svc-rect" x="10" y="50" width="135" height="56" rx="8"/>
+<text class="svc-name" x="77" y="81">order-service</text>
+<text class="svc-port" x="77" y="97">POST /orders/stream</text>
+
+<!-- Kafka topic node (orange) -->
+<rect id="gg-topic" class="kafka-topic" x="195" y="62" width="150" height="36" rx="5"/>
+<text class="node-name" x="270" y="77">user-behavior-logs</text>
+<text class="node-tag"  x="270" y="90">📨 Kafka topic</text>
+
+<!-- analytics-group box (teal) -->
+<rect id="gg-analytics" class="kafka-group-a" x="65" y="152" width="180" height="52" rx="8"/>
+<text class="node-name" x="155" y="170" style="fill:#5eead4">analytics-group</text>
+<text x="155" y="183" class="gc-sub">analytics-service :3005</text>
+<text id="gc-analytics" class="gc-teal" x="155" y="198">0</text>
+
+<!-- ui-service-group box (purple) -->
+<rect id="gg-ui" class="kafka-group-u" x="345" y="152" width="185" height="52" rx="8"/>
+<text class="node-name" x="437" y="170" style="fill:#c4b5fd">ui-service-group</text>
+<text x="437" y="183" class="gc-sub">live dashboard :3004</text>
+<text id="gc-ui" class="gc-purple" x="437" y="198">0</text>
+
+<!-- Packets (start hidden) -->
+<circle id="gp-pub"  r="7" cx="-200" cy="-200" opacity="0" fill="#f59e0b" filter="url(#glow-g)"/>
+<circle id="gp-a"    r="7" cx="-200" cy="-200" opacity="0" fill="#0d9488" filter="url(#glow-g)"/>
+<circle id="gp-u"    r="7" cx="-200" cy="-200" opacity="0" fill="#7c3aed" filter="url(#glow-g)"/>
+</svg>
+
+<!-- ── PHẦN 2: So sánh RabbitMQ queue (static, giải thích tại sao khác) ── -->
+<svg viewBox="0 0 600 120" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:680px;height:auto;display:block;margin:4px auto 0;overflow:visible">
+<defs>
+    <marker id="gx-arr" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5 Z" fill="#4b1a1a"/></marker>
+</defs>
+
+<text x="300" y="16" text-anchor="middle" font-size="11" font-family="monospace" fill="#ef4444" font-weight="bold">❌ RabbitMQ Queue — messages bị CHIA ĐÔI giữa các consumers</text>
+
+<!-- producer -->
+<rect x="10" y="38" width="100" height="44" rx="7" fill="#0c1220" stroke="#1e3a5f" stroke-width="1"/>
+<text x="60" y="62" text-anchor="middle" font-size="10" font-family="monospace" fill="#64748b">producer</text>
+<text x="60" y="75" text-anchor="middle" font-size="9" font-family="monospace" fill="#334155">:3001</text>
+
+<!-- queue -->
+<rect x="155" y="46" width="110" height="34" rx="4" class="rmq-split-q"/>
+<text x="210" y="66" text-anchor="middle" font-size="10" font-family="monospace" fill="#f87171">order_queue</text>
+
+<!-- consumers -->
+<rect x="330" y="30" width="115" height="30" rx="5" fill="#130808" stroke="#7f1d1d" stroke-width="1"/>
+<text x="387" y="50" text-anchor="middle" font-size="10" font-family="monospace" fill="#ef4444">consumer A</text>
+
+<rect x="330" y="72" width="115" height="30" rx="5" fill="#130808" stroke="#7f1d1d" stroke-width="1"/>
+<text x="387" y="92" text-anchor="middle" font-size="10" font-family="monospace" fill="#ef4444">consumer B</text>
+
+<!-- arrows -->
+<path d="M 110,60 L 155,60" stroke="#4b1a1a" stroke-width="1.2" fill="none" marker-end="url(#gx-arr)"/>
+<path d="M 265,55 L 330,45" stroke="#4b1a1a" stroke-width="1.2" fill="none" marker-end="url(#gx-arr)"/>
+<path d="M 265,65 L 330,87" stroke="#4b1a1a" stroke-width="1.2" fill="none" marker-end="url(#gx-arr)"/>
+
+<!-- split labels -->
+<text x="310" y="43" font-size="9" font-family="monospace" fill="#7f1d1d">msg 1,3,5...</text>
+<text x="310" y="85" font-size="9" font-family="monospace" fill="#7f1d1d">msg 2,4,6...</text>
+
+<!-- annotation -->
+<text x="460" y="52" font-size="9" font-family="monospace" fill="#7f1d1d">← nhận 50% message</text>
+<text x="460" y="94" font-size="9" font-family="monospace" fill="#7f1d1d">← nhận 50% message</text>
+<text x="300" y="113" text-anchor="middle" font-size="9" font-family="monospace" fill="#4b1a1a">Muốn cả 2 nhận đủ 100%? Phải tạo 2 queue riêng + fanout exchange — phức tạp hơn nhiều</text>
+</svg>
+
+<!-- Offset tracker — mỗi group giữ offset riêng biệt -->
+<div class="offset-row">
+    <div id="oc-analytics" class="oc teal">
+        <div class="oc-title">analytics-group</div>
+        <div class="oc-row"><span>topic</span><span class="v">user-behavior-logs</span></div>
+        <div class="oc-row"><span>partition</span><span class="v">0</span></div>
+        <div class="oc-row"><span>offset</span><span id="oc-a-offset" class="v">0</span></div>
+        <div class="oc-row"><span>msgs nhận</span><span id="oc-a-msgs" class="v">0</span></div>
+        <div id="oc-a-status" class="oc-status">● RUNNING — analytics-service :3005</div>
+    </div>
+    <div id="oc-ui" class="oc purple">
+        <div class="oc-title">ui-service-group</div>
+        <div class="oc-row"><span>topic</span><span class="v">user-behavior-logs</span></div>
+        <div class="oc-row"><span>partition</span><span class="v">0</span></div>
+        <div class="oc-row"><span>offset</span><span id="oc-u-offset" class="v">0</span></div>
+        <div class="oc-row"><span>msgs nhận</span><span id="oc-u-msgs" class="v">0</span></div>
+        <div id="oc-u-status" class="oc-status">● RUNNING — ui-service :3004</div>
+    </div>
+</div>
+<!-- Crash simulation -->
+<div class="crash-row">
+    <button id="crash-btn-a" class="crash-btn teal" onclick="crashGroup('analytics')">
+        ⚡ Crash analytics-service → group kia vẫn chạy
+    </button>
+    <button id="crash-btn-u" class="crash-btn purple" onclick="crashGroup('ui')">
+        ⚡ Crash ui-service-group → analytics vẫn nhận
+    </button>
+</div>
+<div id="crash-note" class="crash-note"></div>
+
+<!-- Button trigger -->
+<button class="group-send-btn" id="group-send-btn" onclick="runGroupDemo()">
+    ▶ Gửi 1 event → xem cả 2 group nhận cùng lúc
+</button>
+<div id="group-hint">Click để thấy 2 packet chạy ra từ topic đồng thời</div>
+
+</div><!-- /diagram-groups -->
 
 </div><!-- /flow-panel -->
 
@@ -584,6 +778,12 @@ function addLog(event, cfg) {
 
 // ── Main event handler ─────────────────────────────────────────────────────
 function processEvent(event) {
+    // Consumer Groups tab
+    if (event.type === 'user.behavior') {
+        handleUserBehavior(event);
+        return; // không cần log/stats cho event này
+    }
+
     const key = event.type;
     const cfg = EVENTS[key];
     if (!cfg) return;
@@ -729,6 +929,7 @@ function runSync(proto, productId, qty) {
                     (msg ? `<span class="ss-lbl">→</span><span class="ss-val" style="color:#475569">${msg}</span>` : '')
                 );
                 await updateCBBadge();
+                updatePacketInspector(proto, productId, qty);
                 addLog({ source:'sync', type:`${proto.toUpperCase()} ${route} → ${httpStatus}`, productId, latency },
                        { cls: ok ? 'green' : (httpStatus===504||httpStatus===503 ? 'yellow' : 'red') });
                 updateStats(ok ? 'success' : 'failed');
@@ -742,6 +943,178 @@ async function runSyncCB() {
     for (let i = 0; i < 4; i++) {
         await runSync('rest', 'TRIGGER-ERROR', 1);
         await new Promise(r => setTimeout(r, 700));
+    }
+}
+
+// ── Consumer Groups Tab ────────────────────────────────────────────────────
+const groupCounts = { analytics: 0, ui: 0 };
+let groupBusy = false;
+
+function handleUserBehavior(event) {
+    // ui-service-group nhận được
+    if (!crashState.ui) {
+        groupCounts.ui++;
+        document.getElementById('gc-ui').textContent = groupCounts.ui;
+        highlightNode('gg-ui', '#7c3aed');
+        animPkt('gp-u', { curve: [287,108, 287,140, 435,140, 435,152], dur: 500 }, '#7c3aed', null);
+        const uOff = parseInt(document.getElementById('oc-u-offset').textContent) + 1;
+        document.getElementById('oc-u-offset').textContent = uOff;
+        document.getElementById('oc-u-msgs').textContent   = groupCounts.ui;
+    } else {
+        missedWhileCrashed.ui++;
+    }
+    // analytics-group nhận riêng (delay nhỏ = xử lý song song)
+    setTimeout(() => {
+        if (!crashState.analytics) {
+            groupCounts.analytics++;
+            document.getElementById('gc-analytics').textContent = groupCounts.analytics;
+            highlightNode('gg-analytics', '#0d9488');
+            const aOff = parseInt(document.getElementById('oc-a-offset').textContent) + 1;
+            document.getElementById('oc-a-offset').textContent = aOff;
+            document.getElementById('oc-a-msgs').textContent   = groupCounts.analytics;
+        } else {
+            missedWhileCrashed.analytics++;
+        }
+    }, 80);
+}
+
+async function runGroupDemo() {
+    if (groupBusy) return;
+    groupBusy = true;
+    const btn  = document.getElementById('group-send-btn');
+    const hint = document.getElementById('group-hint');
+    btn.disabled = true;
+    hint.textContent = '⏳ Đang publish event...';
+
+    try {
+        // Bước 1: animate order-service → topic
+        highlightNode('gg-order', '#f59e0b');
+        animPkt('gp-pub', { x1: 145, y1: 78, x2: 195, y2: 78, dur: 350 }, '#f59e0b', () => {
+            highlightNode('gg-topic', '#f59e0b');
+        });
+
+        // Bước 2: gọi thật /orders/stream → SSE sẽ push user.behavior về
+        await fetch('/api/orders/stream', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ productId: 'IPHONE-15', quantity: 1 }),
+        });
+
+        // Bước 3: animate fan-out (cả 2 đồng thời, sau khi packet tới topic)
+        setTimeout(() => {
+            hint.textContent = '📡 Topic fan-out → 2 groups nhận cùng lúc';
+            // gp-a: topic → analytics
+            animPkt('gp-a', { curve: [267,108, 267,140, 155,140, 155,152], dur: 500 }, '#0d9488', null);
+            // gp-u: topic → ui-service (SSE sẽ trigger handleUserBehavior khi event về)
+        }, 380);
+
+        setTimeout(() => {
+            hint.textContent = `✓ analytics-group: ${groupCounts.analytics}  |  ✓ ui-service-group: ${groupCounts.ui}  — cả 2 nhận đủ 100%`;
+            groupBusy = false;
+            btn.disabled = false;
+        }, 1200);
+    } catch {
+        hint.textContent = '⚠ Lỗi — order-service có đang chạy không?';
+        groupBusy = false;
+        btn.disabled = false;
+    }
+}
+
+// ── Packet Inspector helpers (Tab 3) ──────────────────────────────────────
+function encodeProtobuf(productId, qty) {
+    const idBytes = Array.from(new TextEncoder().encode(productId));
+    const f1 = [0x0a, idBytes.length, ...idBytes];
+    const f2 = [0x10];
+    let v = qty;
+    while (v > 0x7f) { f2.push((v & 0x7f) | 0x80); v >>>= 7; }
+    f2.push(v & 0x7f);
+    return [...f1, ...f2].map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+}
+
+function updatePacketInspector(proto, productId, qty) {
+    const panel = document.getElementById('packet-inspector');
+    if (!panel) return;
+    const jsonBody = JSON.stringify({ productId, quantity: qty });
+    const jsonSize = jsonBody.length + 185; // estimate with HTTP/1.1 headers
+    const pbHex    = encodeProtobuf(productId, qty);
+    const pbBytes  = pbHex.split(' ').length;
+    const grpcSize = pbBytes + 5 + 65;     // gRPC frame (5) + HTTP/2 headers
+    const savings  = Math.max(0, Math.round((1 - grpcSize / jsonSize) * 100));
+    const route    = proto === 'grpc' ? '/api/orders/sync-grpc' : '/api/orders/sync';
+    // hex rows of 8 bytes
+    const hexBytes = pbHex.split(' ');
+    const hexRows  = [];
+    for (let i = 0; i < hexBytes.length; i += 8) hexRows.push(hexBytes.slice(i, i + 8).join(' '));
+    document.getElementById('pi-rest-body').innerHTML =
+        `<span class="hi">POST ${route} HTTP/1.1</span>\n` +
+        `<span class="dim">Host: localhost:3004\nContent-Type: application/json\nAccept: */*</span>\n\n` +
+        `<span class="cyan">${jsonBody}</span>\n\n` +
+        `<span class="amber">► Payload: ~${jsonSize} bytes  ► UTF-8 text  ► 1 conn/request</span>`;
+    document.getElementById('pi-grpc-body').innerHTML =
+        `<span class="hi">POST /inventory.Inventory/CheckStock HTTP/2</span>\n` +
+        `<span class="dim">:authority: inventory-service:50051\ncontent-type: application/grpc\nte: trailers</span>\n\n` +
+        `<span class="dim">[gRPC frame] 00 00 00 00 ${pbBytes.toString(16).padStart(2,'0').toUpperCase()}</span>\n` +
+        `<span class="cyan">${hexRows.join('\n')}</span>\n\n` +
+        `<span class="amber">► Payload: ~${grpcSize} bytes  ► Binary  ► HTTP/2 multiplexed</span>`;
+    document.getElementById('pi-table').innerHTML =
+        `<tr style="border-bottom:1px solid #1e2a40"><td style="color:#64748b;padding:3px 8px;font-weight:bold" colspan="3">So sánh trực tiếp — request vừa gửi: <span style="color:#94a3b8">${productId} qty=${qty}</span></td></tr>` +
+        `<tr style="border-bottom:1px solid #0f1a2e"><td style="padding:3px 8px;color:#475569">Protocol</td><td class="rv">HTTP/1.1</td><td class="gv">HTTP/2 (multiplexed)</td></tr>` +
+        `<tr style="border-bottom:1px solid #0f1a2e"><td style="padding:3px 8px;color:#475569">Encoding</td><td class="rv">JSON · text</td><td class="gv">Protobuf · binary</td></tr>` +
+        `<tr style="border-bottom:1px solid #0f1a2e"><td style="padding:3px 8px;color:#475569">Payload size</td><td class="rv">~${jsonSize} bytes</td><td class="gv">~${grpcSize} bytes <span style="color:#22c55e">(${savings}% nhỏ hơn)</span></td></tr>` +
+        `<tr style="border-bottom:1px solid #0f1a2e"><td style="padding:3px 8px;color:#475569">Streaming</td><td class="rv">Không hỗ trợ</td><td class="gv">Client / Server / Bidirectional</td></tr>` +
+        `<tr><td style="padding:3px 8px;color:#475569">Schema</td><td class="rv">OpenAPI / Swagger</td><td class="gv">.proto (type-safe, code gen)</td></tr>`;
+    panel.style.display = 'block';
+}
+
+// ── Consumer Groups crash simulation ──────────────────────────────────────
+const crashState          = { analytics: false, ui: false };
+const missedWhileCrashed  = { analytics: 0, ui: 0 };
+
+function crashGroup(group) {
+    const suf      = group === 'analytics' ? 'a' : 'u';
+    const btn      = document.getElementById(`crash-btn-${suf}`);
+    const card     = document.getElementById(`oc-${group === 'analytics' ? 'analytics' : 'ui'}`);
+    const statusEl = document.getElementById(`oc-${suf}-status`);
+    const note     = document.getElementById('crash-note');
+    const svcLabel = group === 'analytics' ? 'analytics-service :3005' : 'ui-service :3004';
+
+    if (!crashState[group]) {
+        // ─ CRASH ─
+        crashState[group] = true;
+        missedWhileCrashed[group] = 0;
+        card.classList.add('crashed');
+        statusEl.textContent = '● CRASHED — không nhận được message mới';
+        btn.textContent = `▶ Restart ${group === 'analytics' ? 'analytics-service' : 'ui-service-group'}`;
+        note.textContent = `⚠ ${group}-group crashed — nhấn "Gửi event" để thấy group còn lại vẫn nhận bình thường`;
+    } else {
+        // ─ RESTART + REPLAY ─
+        crashState[group] = false;
+        card.classList.remove('crashed');
+        const missed = missedWhileCrashed[group];
+        if (missed > 0) {
+            if (group === 'analytics') {
+                groupCounts.analytics += missed;
+                document.getElementById('gc-analytics').textContent = groupCounts.analytics;
+                const off = parseInt(document.getElementById('oc-a-offset').textContent) + missed;
+                document.getElementById('oc-a-offset').textContent = off;
+                document.getElementById('oc-a-msgs').textContent   = groupCounts.analytics;
+            } else {
+                groupCounts.ui += missed;
+                document.getElementById('gc-ui').textContent = groupCounts.ui;
+                const off = parseInt(document.getElementById('oc-u-offset').textContent) + missed;
+                document.getElementById('oc-u-offset').textContent = off;
+                document.getElementById('oc-u-msgs').textContent   = groupCounts.ui;
+            }
+            statusEl.textContent = `● RECOVERED — đang replay ${missed} msg từ committed offset`;
+            note.textContent = `✓ Kafka lưu offset → restart xong group tự replay đủ ${missed} message bị bỏ lỡ`;
+        } else {
+            statusEl.textContent = `● RUNNING — ${svcLabel}`;
+            note.textContent = '✓ Group đã restart — không có message nào bị bỏ lỡ';
+        }
+        btn.textContent = `⚡ Crash ${group === 'analytics' ? 'analytics-service' : 'ui-service-group'} → group kia vẫn chạy`;
+        setTimeout(() => {
+            if (!crashState[group]) statusEl.textContent = `● RUNNING — ${svcLabel}`;
+        }, 3000);
     }
 }
 

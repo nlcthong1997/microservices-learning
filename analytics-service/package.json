@@ -1,0 +1,10 @@
+{
+  "name": "analytics-service",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^5.2.1",
+    "kafkajs": "^2.2.4",
+    "winston": "^3.17.0",
+    "winston-loki": "^6.1.3"
+  }
+}

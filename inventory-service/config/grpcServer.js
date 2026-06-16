@@ -61,38 +61,32 @@ const inventoryProto = grpc.loadPackageDefinition(packageDefinition).inventory;
 //   - Nếu thành công: callback(null, responseObject)
 //   - Nếu lỗi:        callback(new Error("message"))
 
+// gRPC dùng callback pattern — wrap async/await vào trong
 function checkStock(call, callback) {
   const { product_id, quantity } = call.request;
 
   logger.info('gRPC: CheckStock request received', {
-    product_id,
-    quantity,
-    protocol: 'gRPC',  // để phân biệt với REST logs
+    product_id, quantity, protocol: 'gRPC',
   });
 
-  // Gọi service layer — cùng logic với REST, không viết lại
-  const result = checkStockService(product_id, quantity);
+  // checkStockService giờ là async → dùng .then/.catch cho gRPC callback pattern
+  checkStockService(product_id, quantity)
+    .then((result) => {
+      if (!result.found) {
+        logger.warn('gRPC: Product not found', { product_id });
+        return callback({ code: grpc.status.NOT_FOUND, message: result.message });
+      }
 
-  if (!result.found) {
-    logger.warn('gRPC: Product not found', { product_id });
-    return callback({
-      code: grpc.status.NOT_FOUND,
-      message: result.message,
+      logger.info('gRPC: CheckStock result', {
+        product_id, stock: result.stock, requested: quantity, available: result.available,
+      });
+
+      callback(null, { available: result.available, stock: result.stock, message: result.message });
+    })
+    .catch((err) => {
+      logger.error('gRPC: CheckStock error', { product_id, error: err.message });
+      callback({ code: grpc.status.INTERNAL, message: err.message });
     });
-  }
-
-  logger.info('gRPC: CheckStock result', {
-    product_id,
-    stock: result.stock,
-    requested: quantity,
-    available: result.available,
-  });
-
-  callback(null, {
-    available: result.available,
-    stock: result.stock,
-    message: result.message,
-  });
 }
 
 // =====================================================================

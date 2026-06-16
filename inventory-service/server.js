@@ -10,8 +10,10 @@ const {
     getOrderEventsConsumer,
     getPaymentEventsConsumer,
 } = require('./config/kafka');
-// Import dữ liệu dùng chung (cho consumers sử dụng)
-const mockInventory = require('./models/inventory');
+const { connectDB } = require('./config/db');
+
+// Business logic layer (giờ dùng PostgreSQL)
+const { reserveStock, releaseReserve } = require('./services/inventoryService');
 
 // Import route file mới (TÁCH BIỆT)
 const inventoryRoutes = require('./routes/inventoryRoutes');
@@ -32,39 +34,32 @@ const PORT = 3002;
 app.use(express.json());
 
 // --- MOUNT ROUTES ---
-// Mọi route trong file inventoryRoutes.js sẽ bắt đầu bằng '/inventory'
 app.use('/inventory', inventoryRoutes);
 
 // =========================================================================
 // CÁC CONSUMERS BẤT ĐỒNG BỘ (ASYNC - RabbitMQ)
-// (Logic giữ nguyên, nhưng dùng mockInventory từ models file)
 // =========================================================================
 
 // LUỒNG 2A: Consumer cho Luồng Chính (Nhận chốt đơn)
 async function startOrderCreatedConsumer() {
     const channel = getRabbitChannel();
-
     if (!channel) return;
-
     logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer 'order.created' is listening...` });
 
-    channel.consume(ORDER_QUEUE, (msg) => {
+    channel.consume(ORDER_QUEUE, async (msg) => {
         if (msg !== null) {
             const traceId = msg.properties.headers['x-trace-id'] || 'SYSTEM-ASYNC-ORDER';
-            const orderCreatedEvent = JSON.parse(msg.content.toString());
-            const { productId, quantity } = orderCreatedEvent;
+            const { productId, quantity } = JSON.parse(msg.content.toString());
 
-            // --- NGHIỆP VỤ TRỪ KHO TẠM THỜI (Dùng nguồn dữ liệu shared) ---
-            const product = mockInventory[productId];
-            
-            if (product && product.stock >= quantity) {
-                product.stock -= quantity;
-                product.reserved += quantity;
-                logger.info({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE success.` });
+            // reserveStock dùng SELECT FOR UPDATE → tránh race condition
+            const result = await reserveStock(productId, quantity);
+
+            if (result.success) {
+                logger.info({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE success. Stock remaining: ${result.stock}` });
                 channel.ack(msg);
             } else {
-                logger.error({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE failed - out of stock.` });
-                channel.nack(msg, false, false);
+                logger.error({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE failed — ${result.reason}` });
+                channel.nack(msg, false, false); // → DLX
             }
         }
     });
@@ -73,25 +68,15 @@ async function startOrderCreatedConsumer() {
 // LUỒNG 2B: Consumer cho SAGA BÙ (Nhận thanh toán fail)
 async function startSagaRollbackConsumer() {
     const channel = getRabbitChannel();
-
     if (!channel) return;
-
     logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer SAGA 'payment.failed' is listening...` });
 
-    channel.consume(SAGA_ROLLBACK_QUEUE, (msg) => {
+    channel.consume(SAGA_ROLLBACK_QUEUE, async (msg) => {
         if (msg !== null) {
             const traceId = msg.properties.headers['x-trace-id'] || 'SYSTEM-SAGA-BU';
-            const sagaFailedEvent = JSON.parse(msg.content.toString());
-            const { productId, quantity } = sagaFailedEvent;
-
-            // --- NGHIỆP VỤ ROLLBACK (Dùng nguồn dữ liệu shared) ---
-            const product = mockInventory[productId];
-            
-            if (product) {
-                product.reserved -= quantity;
-                product.stock += quantity;
-                logger.info({ trace_id: traceId, message: `[SAGA] ROLLBACK success.` });
-            }
+            const { productId, quantity } = JSON.parse(msg.content.toString());
+            await releaseReserve(productId, quantity);
+            logger.info({ trace_id: traceId, message: `[SAGA] ROLLBACK success — stock released for ${productId}` });
             channel.ack(msg);
         }
     });
@@ -166,7 +151,6 @@ async function startKafkaOrderEventsConsumer() {
     const producer = getKafkaProducer();
 
     await consumer.subscribe({ topic: 'order-events', fromBeginning: false });
-
     logger.info({ trace_id: 'SYSTEM', message: 'Kafka: Consumer "order-events" is listening...' });
 
     await consumer.run({
@@ -181,18 +165,14 @@ async function startKafkaOrderEventsConsumer() {
                 message: `[Kafka SAGA] Received order.created — orderId=${orderId}, productId=${productId}, qty=${quantity}`,
             });
 
-            const product = mockInventory[productId];
+            // SELECT FOR UPDATE bên trong reserveStock → race condition safe
+            const result = await reserveStock(productId, quantity);
 
-            if (product && product.stock >= quantity) {
-                // Reserve kho
-                product.stock    -= quantity;
-                product.reserved += quantity;
-
+            if (result.success) {
                 logger.info({
                     trace_id: traceId,
-                    message: `[Kafka SAGA] Stock RESERVED for orderId=${orderId}. Stock remaining: ${product.stock}`,
+                    message: `[Kafka SAGA] Stock RESERVED for orderId=${orderId}. Stock remaining: ${result.stock}`,
                 });
-
                 await producer.send({
                     topic: 'inventory-events',
                     messages: [{
@@ -205,13 +185,11 @@ async function startKafkaOrderEventsConsumer() {
                         headers: { 'x-trace-id': traceId },
                     }],
                 });
-
             } else {
                 logger.error({
                     trace_id: traceId,
-                    message: `[Kafka SAGA] Stock FAILED for orderId=${orderId} — product not found or out of stock.`,
+                    message: `[Kafka SAGA] Stock FAILED for orderId=${orderId} — ${result.reason}`,
                 });
-
                 await producer.send({
                     topic: 'inventory-events',
                     messages: [{
@@ -219,7 +197,7 @@ async function startKafkaOrderEventsConsumer() {
                         value: JSON.stringify({
                             type: 'inventory.failed',
                             orderId, productId, quantity, traceId,
-                            reason: product ? 'out_of_stock' : 'product_not_found',
+                            reason: result.reason,
                             failedAt: new Date().toISOString(),
                         }),
                         headers: { 'x-trace-id': traceId },
@@ -232,9 +210,7 @@ async function startKafkaOrderEventsConsumer() {
 
 async function startKafkaPaymentEventsConsumer() {
     const consumer = getPaymentEventsConsumer();
-
     await consumer.subscribe({ topic: 'payment-events', fromBeginning: false });
-
     logger.info({ trace_id: 'SYSTEM', message: 'Kafka: Consumer "payment-events" is listening (SAGA rollback)...' });
 
     await consumer.run({
@@ -250,24 +226,22 @@ async function startKafkaPaymentEventsConsumer() {
             });
 
             // Compensating transaction — hoàn lại kho đã reserve
-            const product = mockInventory[productId];
-            if (product) {
-                product.reserved -= quantity;
-                product.stock    += quantity;
+            await releaseReserve(productId, quantity);
 
-                logger.info({
-                    trace_id: traceId,
-                    message: `[Kafka SAGA] ROLLBACK complete for orderId=${orderId}. Stock restored: ${product.stock}`,
-                });
-            }
+            logger.info({
+                trace_id: traceId,
+                message: `[Kafka SAGA] ROLLBACK complete for orderId=${orderId}. Stock released for ${productId} x${quantity}`,
+            });
         },
     });
 }
 
-// Fix startup bug — xem giải thích chi tiết trong order-service/server.js
 async function start() {
     try {
         logger.info({ trace_id: 'SYSTEM', message: 'Connecting to infrastructure...' });
+
+        // PostgreSQL phải connect trước — các consumer phụ thuộc vào DB
+        await connectDB();
 
         await connectRabbit();
         await startOrderCreatedConsumer();
@@ -278,9 +252,6 @@ async function start() {
         await startKafkaOrderEventsConsumer();
         await startKafkaPaymentEventsConsumer();
 
-        // Khởi động gRPC Server (port 50051) SONG SONG với Express (port 3002)
-        // Hai server độc lập — gRPC phục vụ các service nội bộ (binary, nhanh)
-        //                    — Express phục vụ REST API (browser, curl, Postman)
         startGrpcServer();
 
         app.listen(PORT, () => {

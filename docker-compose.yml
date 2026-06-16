@@ -57,3 +57,23 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
+
+  # 4. PostgreSQL — Database của inventory-service
+  #    Mỗi service sở hữu DB riêng (Database per Service pattern)
+  #    Không service nào khác được kết nối trực tiếp vào DB này
+  postgres:
+    image: postgres:16-alpine
+    container_name: local_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: inventory_user
+      POSTGRES_PASSWORD: inventory_pass
+      POSTGRES_DB: inventory_db
+    volumes:
+      - ./inventory-service/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_user -d inventory_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

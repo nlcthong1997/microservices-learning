@@ -86,9 +86,10 @@ async function startKafkaConsumer() {
     try {
         await admin.createTopics({
             topics: [
-                { topic: 'order-events',     numPartitions: 1, replicationFactor: 1 },
-                { topic: 'inventory-events', numPartitions: 1, replicationFactor: 1 },
-                { topic: 'payment-events',   numPartitions: 1, replicationFactor: 1 },
+                { topic: 'order-events',        numPartitions: 1, replicationFactor: 1 },
+                { topic: 'inventory-events',     numPartitions: 1, replicationFactor: 1 },
+                { topic: 'payment-events',       numPartitions: 1, replicationFactor: 1 },
+                { topic: 'user-behavior-logs',   numPartitions: 1, replicationFactor: 1 },
             ],
             waitForLeaders: true,
         });
@@ -98,7 +99,7 @@ async function startKafkaConsumer() {
     const consumer = kafka.consumer({ groupId: 'ui-service-group' });
     await consumer.connect();
     await consumer.subscribe({
-        topics: ['order-events', 'inventory-events', 'payment-events'],
+        topics: ['order-events', 'inventory-events', 'payment-events', 'user-behavior-logs'],
         fromBeginning: false,
     });
 
@@ -106,12 +107,14 @@ async function startKafkaConsumer() {
         eachMessage: async ({ topic, message }) => {
             try {
                 const event = JSON.parse(message.value.toString());
-                broadcast({ source: 'kafka', topic, ...event, receivedAt: new Date().toISOString() });
+                // user-behavior-logs không có field `type` — thêm vào để browser nhận diện
+                const type = event.type || (topic === 'user-behavior-logs' ? 'user.behavior' : undefined);
+                broadcast({ source: 'kafka', topic, ...event, type, receivedAt: new Date().toISOString() });
             } catch { }
         },
     });
 
-    console.log('[UI] Kafka consumer ready — watching order-events, inventory-events, payment-events');
+    console.log('[UI] Kafka consumer ready — watching order-events, inventory-events, payment-events, user-behavior-logs');
 }
 
 // ── RabbitMQ Observer ─────────────────────────────────────────────────────
