@@ -13,7 +13,7 @@ const {
 const { connectDB } = require('./config/db');
 
 // Business logic layer (giờ dùng PostgreSQL)
-const { reserveStock, releaseReserve } = require('./services/inventoryService');
+const { reserveStock, releaseReserve, confirmSale } = require('./services/inventoryService');
 
 // Import route file mới (TÁCH BIỆT)
 const inventoryRoutes = require('./routes/inventoryRoutes');
@@ -24,9 +24,10 @@ const { startGrpcServer } = require('./config/grpcServer');
 // =========================================================================
 // TÊN QUEUE — khai báo 1 chỗ, dùng chung cho setup và consumer
 // =========================================================================
-const ORDER_QUEUE          = 'inventory_order_created_queue';
-const SAGA_ROLLBACK_QUEUE  = 'inventory_saga_rollback_queue';
-const DLQ                  = 'inventory_order_failed_queue';
+const ORDER_QUEUE               = 'inventory_order_created_queue';
+const SAGA_ROLLBACK_QUEUE       = 'inventory_saga_rollback_queue';
+const DLQ                       = 'inventory_order_failed_queue';
+const PAYMENT_COMPLETED_QUEUE   = 'inventory_payment_completed_queue';
 
 const app = express();
 const PORT = 3002;
@@ -56,11 +57,37 @@ async function startOrderCreatedConsumer() {
 
             if (result.success) {
                 logger.info({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE success. Stock remaining: ${result.stock}` });
+
+                // Publish sang inventory_events → payment-service nhận và charge
+                const { orderId } = JSON.parse(msg.content.toString());
+                channel.publish(
+                    'inventory_events', '',
+                    Buffer.from(JSON.stringify({ type: 'inventory.reserved', orderId, productId, quantity, traceId, reservedAt: new Date().toISOString() })),
+                    { headers: { 'x-trace-id': traceId } }
+                );
+
                 channel.ack(msg);
             } else {
                 logger.error({ trace_id: traceId, message: `[RabbitMQ Async] RESERVE failed — ${result.reason}` });
                 channel.nack(msg, false, false); // → DLX
             }
+        }
+    });
+}
+
+// LUỒNG 2C: Consumer cho PAYMENT COMPLETED (Confirm sale — trừ stock thật)
+async function startPaymentCompletedConsumer() {
+    const channel = getRabbitChannel();
+    if (!channel) return;
+    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer 'payment.completed' is listening on ${PAYMENT_COMPLETED_QUEUE}...` });
+
+    channel.consume(PAYMENT_COMPLETED_QUEUE, async (msg) => {
+        if (msg !== null) {
+            const traceId = msg.properties.headers['x-trace-id'] || 'SYSTEM-PMT-OK';
+            const { productId, quantity, orderId } = JSON.parse(msg.content.toString());
+            await confirmSale(productId, quantity);
+            logger.info({ trace_id: traceId, message: `[RabbitMQ SAGA] CONFIRM SALE — stock deducted for orderId=${orderId}, product=${productId}` });
+            channel.ack(msg);
         }
     });
 }
@@ -246,6 +273,7 @@ async function start() {
         await connectRabbit();
         await startOrderCreatedConsumer();
         await startSagaRollbackConsumer();
+        await startPaymentCompletedConsumer();
         await startDLQConsumer();
 
         await connectKafka();

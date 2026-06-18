@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>API Playground — Microservice Learning 2026</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html{zoom:1.25}
+body{background:#060d1a;color:#94a3b8;font-family:monospace;font-size:13px;height:100vh;overflow:hidden}
+header{padding:14px 24px;background:#070e1c;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:14px}
+header h1{font-size:15px;color:#e2e8f0;font-weight:bold;letter-spacing:.3px}
+header .sub{font-size:10px;color:#5a7a9a}
+.badge{font-size:9px;padding:2px 7px;border-radius:3px;font-weight:bold;letter-spacing:.5px;flex-shrink:0}
+.badge.get{background:#0a2210;color:#4ade80;border:1px solid #166534}
+.badge.post{background:#0a1830;color:#60a5fa;border:1px solid #1e3a5f}
+
+.layout{display:flex;height:calc(100vh - 49px)}
+
+/* Left nav */
+.nav{width:210px;flex-shrink:0;background:#070e1c;border-right:1px solid #1e293b;overflow-y:auto;padding:8px 0}
+.nav-section{padding:8px 14px 4px;font-size:9px;color:#4a6a8a;letter-spacing:.8px;text-transform:uppercase;border-top:1px solid #0f1a2e;margin-top:4px}
+.nav-section:first-child{border-top:none;margin-top:0}
+.nav-item{display:flex;align-items:center;gap:7px;padding:5px 14px;cursor:pointer;border-left:2px solid transparent;transition:all .15s}
+.nav-item:hover{background:#0d1829;color:#cbd5e1}
+.nav-item.active{background:#0d1829;border-left-color:#3b82f6;color:#e2e8f0}
+.nav-item .method{font-size:8px;font-weight:bold;width:32px;text-align:center;padding:1px 3px;border-radius:2px;flex-shrink:0}
+.nav-item .method.GET{background:#0a2210;color:#4ade80}
+.nav-item .method.POST{background:#0a1830;color:#60a5fa}
+.nav-item .ep-name{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Main content */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.endpoint-panel{flex:1;overflow-y:auto;padding:20px 24px}
+.endpoint-title{font-size:16px;color:#e2e8f0;font-weight:bold;margin-bottom:4px;display:flex;align-items:center;gap:10px}
+.endpoint-desc{font-size:11px;color:#8aa0b5;margin-bottom:16px;line-height:1.6}
+.concept-box{background:#070e1c;border:1px solid #1e293b;border-radius:6px;padding:12px 14px;margin-bottom:16px;font-size:10px;line-height:1.7;color:#8aa0b5}
+.concept-box .title{font-size:10px;color:#22c55e;font-weight:bold;margin-bottom:6px;letter-spacing:.3px}
+.concept-box code{color:#94a3b8;background:#0f1829;padding:1px 5px;border-radius:3px}
+
+/* Scenario buttons */
+.scenarios{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.scenario{background:#0a1220;border:1px solid #1e293b;border-radius:7px;overflow:hidden;transition:border-color .15s}
+.scenario:hover{border-color:#2d4a6b}
+.scenario-header{display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer}
+.scenario-header .s-badge{font-size:9px;padding:1px 7px;border-radius:3px;font-weight:bold;flex-shrink:0}
+.s-badge.success{background:#0a2210;color:#4ade80;border:1px solid #166534}
+.s-badge.fail{background:#1a0808;color:#f87171;border:1px solid #7f1d1d}
+.s-badge.warn{background:#1a1000;color:#fbbf24;border:1px solid #78350f}
+.s-badge.info{background:#0a1830;color:#60a5fa;border:1px solid #1e3a5f}
+.scenario-header .s-name{font-size:11px;color:#b0c4d8;flex:1}
+.scenario-body{padding:0 14px;display:none}
+.scenario.open .scenario-body{display:block;padding:0 14px 12px}
+.param-row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.param-row label{font-size:9px;color:#7a9ab5;width:90px;flex-shrink:0;text-transform:uppercase;letter-spacing:.3px}
+.param-row input,
+.param-row select{background:#070e1c;border:1px solid #1e2a40;color:#94a3b8;padding:4px 8px;border-radius:4px;font-family:monospace;font-size:11px;flex:1;outline:none;transition:border-color .15s}
+.param-row input:focus,
+.param-row select:focus{border-color:#3b82f6;color:#e2e8f0}
+.run-btn{margin-top:8px;padding:6px 18px;background:#0d2240;border:1px solid #1e3a5f;color:#60a5fa;font-family:monospace;font-size:11px;border-radius:4px;cursor:pointer;transition:all .15s;font-weight:bold}
+.run-btn:hover{background:#162e52;border-color:#3b82f6;color:#93c5fd}
+.run-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* Response box */
+.res-box{margin-top:10px;background:#040911;border:1px solid #1e293b;border-radius:6px;overflow:hidden;display:none}
+.res-box.show{display:block}
+.res-header{display:flex;align-items:center;gap:10px;padding:6px 12px;background:#070e1c;border-bottom:1px solid #1e293b;font-size:9px}
+.res-status{font-weight:bold;padding:1px 7px;border-radius:3px;font-size:10px}
+.res-status.ok{background:#0a2210;color:#4ade80}
+.res-status.err{background:#1a0808;color:#f87171}
+.res-latency{color:#5a7a9a}
+.res-body{padding:10px 14px;font-size:10px;white-space:pre-wrap;word-break:break-all;color:#8aa0b5;max-height:200px;overflow-y:auto;line-height:1.6}
+.res-body .key{color:#7c9cbf}
+.res-body .str{color:#4ade80}
+.res-body .num{color:#f59e0b}
+.res-body .bool{color:#a78bfa}
+
+/* Result panel bottom */
+.result-panel{height:220px;flex-shrink:0;border-top:1px solid #1e293b;background:#040911;display:flex;flex-direction:column}
+.rp-header{padding:6px 16px;background:#070e1c;border-bottom:1px solid #1e293b;display:flex;align-items:center;justify-content:space-between;font-size:9px;color:#5a7a9a}
+.rp-header button{background:none;border:none;color:#5a7a9a;cursor:pointer;font-size:9px;font-family:monospace}
+.rp-header button:hover{color:#94a3b8}
+#log-stream{flex:1;overflow-y:auto;padding:8px 14px;font-size:10px;line-height:1.65}
+.log-entry{display:flex;gap:10px;padding:2px 0;border-bottom:1px solid #0a1220}
+.log-entry:last-child{border:none}
+.log-ts{color:#4a6a8a;flex-shrink:0;width:55px}
+.log-method{flex-shrink:0;width:30px;font-weight:bold}
+.log-method.GET{color:#4ade80}
+.log-method.POST{color:#60a5fa}
+.log-url{color:#5a7a9a;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log-code{flex-shrink:0;width:30px;text-align:right}
+.log-code.ok{color:#4ade80}
+.log-code.err{color:#f87171}
+.log-latency{color:#4a6a8a;flex-shrink:0;width:45px;text-align:right}
+
+/* Welcome screen */
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#5a7a9a;text-align:center;gap:8px}
+.welcome h2{color:#4a7a9a;font-size:18px}
+.welcome p{font-size:11px;max-width:320px;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+    <h1>⚡ API Playground</h1>
+    <span class="sub">Microservice Learning 2026 — click để test, không cần curl</span>
+    <span style="margin-left:auto;font-size:9px;color:#1e3050">order-service :3001 · inventory-service :3002 · analytics-service :3005</span>
+</header>
+
+<div class="layout">
+<!-- ── Left Nav ── -->
+<nav class="nav">
+    <div class="nav-section">Giai đoạn 1 — Health</div>
+    <div class="nav-item" onclick="show('health-order')">
+        <span class="method GET">GET</span><span class="ep-name">/health (order)</span>
+    </div>
+    <div class="nav-item" onclick="show('health-inventory')">
+        <span class="method GET">GET</span><span class="ep-name">/health (inventory)</span>
+    </div>
+    <div class="nav-item" onclick="show('inventory-check')">
+        <span class="method GET">GET</span><span class="ep-name">/inventory/:productId</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 1 — HTTP Sync</div>
+    <div class="nav-item" onclick="show('sync-basic')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/sync</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 2 — Resilience</div>
+    <div class="nav-item" onclick="show('sync-resilient')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/sync-resilient</span>
+    </div>
+    <div class="nav-item" onclick="show('circuit-status')">
+        <span class="method GET">GET</span><span class="ep-name">/orders/circuit-status</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 3 — RabbitMQ</div>
+    <div class="nav-item" onclick="show('async')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/async</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 5 — Kafka Stream</div>
+    <div class="nav-item" onclick="show('stream')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/stream</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 6 — gRPC</div>
+    <div class="nav-item" onclick="show('sync-grpc')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/sync-grpc</span>
+    </div>
+
+    <div class="nav-section">Giai đoạn 7 — Kafka SAGA</div>
+    <div class="nav-item" onclick="show('kafka-saga')">
+        <span class="method POST">POST</span><span class="ep-name">/orders/kafka-saga</span>
+    </div>
+
+    <div class="nav-section">Analytics Service</div>
+    <div class="nav-item" onclick="show('analytics-summary')">
+        <span class="method GET">GET</span><span class="ep-name">/analytics/summary</span>
+    </div>
+    <div class="nav-item" onclick="show('analytics-product')">
+        <span class="method GET">GET</span><span class="ep-name">/analytics/products/:id</span>
+    </div>
+</nav>
+
+<!-- ── Main ── -->
+<div class="main">
+<div class="endpoint-panel" id="panel">
+
+<!-- WELCOME -->
+<div id="ep-welcome" class="ep welcome">
+    <h2>Chọn endpoint từ menu bên trái</h2>
+    <p>Mỗi endpoint có các kịch bản test sẵn.<br>Click ▶ Run để gửi request và xem kết quả ngay.</p>
+</div>
+
+<!-- ═══════════ HEALTH ORDER ═══════════ -->
+<div id="ep-health-order" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /health — order-service</div>
+    <div class="endpoint-desc">Kiểm tra order-service còn sống không. Route này luôn trả 200 ngay lập tức.</div>
+    <div class="concept-box"><div class="title">Health Check Pattern</div>
+Load balancer gọi <code>/health</code> định kỳ. Nếu trả 200 → service UP, nếu không phản hồi → route traffic sang instance khác.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ OK</span><span class="s-name">Check order-service alive</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runGet(this,'/api/health/order')">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ HEALTH INVENTORY ═══════════ -->
+<div id="ep-health-inventory" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /health — inventory-service</div>
+    <div class="endpoint-desc">Kiểm tra inventory-service còn sống không.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ OK</span><span class="s-name">Check inventory-service alive</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runGet(this,'/api/health/inventory')">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ INVENTORY CHECK ═══════════ -->
+<div id="ep-inventory-check" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /inventory/:productId</div>
+    <div class="endpoint-desc">Xem tồn kho của sản phẩm. Không trừ kho — chỉ đọc.</div>
+    <div class="concept-box"><div class="title">Database per Service</div>
+Chỉ inventory-service được đọc DB kho. Không service nào khác kết nối trực tiếp vào DB này.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Còn hàng</span><span class="s-name">Xem kho IPHONE-15</span></div>
+            <div class="scenario-body">
+                <div class="param-row"><label>productId</label><input id="inv-pid" value="IPHONE-15"/></div>
+                <button class="run-btn" onclick="runGet(this,'/api/inventory/'+document.getElementById('inv-pid').value)">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ Not Found</span><span class="s-name">Sản phẩm không tồn tại</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runGet(this,'/api/inventory/FAKE-SKU')">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ SYNC BASIC ═══════════ -->
+<div id="ep-sync-basic" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/sync</div>
+    <div class="endpoint-desc">HTTP Sync cơ bản — không có timeout, không có retry, không có circuit breaker.</div>
+    <div class="concept-box"><div class="title">Vấn đề của Sync không có bảo vệ</div>
+Nếu inventory-service không phản hồi → request treo vô thời hạn. 1000 user đồng thời = 1000 connection treo → order-service crash. Dùng <code>/sync-resilient</code> trong production.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Thành công</span><span class="s-name">Đặt hàng thành công</span></div>
+            <div class="scenario-body">
+                <div class="param-row"><label>productId</label><input id="sb-pid" value="IPHONE-15"/></div>
+                <div class="param-row"><label>quantity</label><input id="sb-qty" value="1" type="number"/></div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync',{productId:v('sb-pid'),quantity:+v('sb-qty')})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ Hết hàng</span><span class="s-name">qty=999 → out of stock</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync',{productId:'IPHONE-15',quantity:999})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ SYNC RESILIENT ═══════════ -->
+<div id="ep-sync-resilient" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/sync-resilient</div>
+    <div class="endpoint-desc">3 lớp bảo vệ: Circuit Breaker → Retry → Timeout (3s per attempt, max 3 retries).</div>
+    <div class="concept-box"><div class="title">Thứ tự bảo vệ</div>
+<code>Circuit Breaker</code> kiểm tra trạng thái trước. Nếu OPEN → fail ngay (&lt;1ms).<br>
+Nếu CLOSED → <code>Retry</code> thử lại khi gặp lỗi tạm thời.<br>
+Mỗi lần retry có <code>Timeout</code> 3s. Tổng worst-case: 3×3 = 9s.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Thành công</span><span class="s-name">Normal call &lt;200ms</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-resilient',{productId:'IPHONE-15',quantity:1})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge warn">⏱ Timeout</span><span class="s-name">TRIGGER-SLOW → 504 sau ~9s</span></div>
+            <div class="scenario-body">
+                <div class="concept-box" style="margin:8px 0 6px">Inventory giả vờ chậm 5s. Order-service timeout sau 3s × 3 lần retry = 9s rồi trả 504.</div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-resilient',{productId:'TRIGGER-SLOW',quantity:1})">▶ Run (chờ ~9s)</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">⚡ Circuit Breaker</span><span class="s-name">TRIGGER-ERROR ×4 → CB OPEN</span></div>
+            <div class="scenario-body">
+                <div class="concept-box" style="margin:8px 0 6px">Click 3 lần → failures tăng → lần thứ 4 circuit OPEN → fail ngay &lt;1ms (không chờ timeout nữa).</div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-resilient',{productId:'TRIGGER-ERROR',quantity:1})">▶ Run (lần này)</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ CIRCUIT STATUS ═══════════ -->
+<div id="ep-circuit-status" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /orders/circuit-status</div>
+    <div class="endpoint-desc">Xem trạng thái circuit breaker real-time: CLOSED / OPEN / HALF_OPEN và số failures.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge info">ℹ Status</span><span class="s-name">Xem trạng thái CB</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runGet(this,'/api/circuit-status')">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ ASYNC ═══════════ -->
+<div id="ep-async" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/async</div>
+    <div class="endpoint-desc">RabbitMQ Async + SAGA — trả 202 ngay, xử lý ngầm qua exchange → queue → inventory → payment.</div>
+    <div class="concept-box"><div class="title">Fire-and-forget + Eventual Consistency</div>
+Client nhận 202 Accepted (~2ms) mà không biết kết quả cuối. Inventory reserve → payment charge (RabbitMQ SAGA).<br>
+Xem log các service để theo dõi luồng xử lý tiếp theo.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Happy path</span><span class="s-name">Reserve + payment success → confirmSale</span></div>
+            <div class="scenario-body">
+                <div class="param-row"><label>productId</label><input id="as-pid" value="IPHONE-15"/></div>
+                <div class="param-row"><label>quantity</label><input id="as-qty" value="1" type="number"/></div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/async',{productId:v('as-pid'),quantity:+v('as-qty')})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ Hết hàng → DLQ</span><span class="s-name">qty=999 → nack → Dead Letter Queue</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/async',{productId:'IPHONE-15',quantity:999})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge warn">↩ SAGA Rollback</span><span class="s-name">FAIL-PAYMENT → reserve OK → payment từ chối → rollback</span></div>
+            <div class="scenario-body">
+                <div class="concept-box" style="margin:8px 0 6px">Inventory reserve thành công (stock có hàng). Payment-service nhận FAIL-PAYMENT → từ chối → publish saga_events → inventory rollback.</div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/async',{productId:'FAIL-PAYMENT',quantity:1})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ STREAM ═══════════ -->
+<div id="ep-stream" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/stream</div>
+    <div class="endpoint-desc">Publish event vào Kafka topic <code>user-behavior-logs</code> — demo Consumer Groups fan-out.</div>
+    <div class="concept-box"><div class="title">Consumer Groups — Fan-out</div>
+Cùng 1 event → <code>analytics-group</code> (analytics-service :3005) và <code>ui-service-group</code> (dashboard) nhận <strong>độc lập</strong>. Mỗi group giữ offset riêng.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Publish</span><span class="s-name">Gửi behavior event → cả 2 groups nhận</span></div>
+            <div class="scenario-body">
+                <div class="param-row">
+                    <label>productId</label>
+                    <select id="st-pid">
+                        <option>IPHONE-15</option>
+                        <option>MACBOOK-M3</option>
+                        <option>LAPTOP-MODULAR-TEST</option>
+                    </select>
+                </div>
+                <div class="param-row"><label>quantity</label><input id="st-qty" value="1" type="number"/></div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/stream',{productId:v('st-pid'),quantity:+v('st-qty')})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge info">× 10 events</span><span class="s-name">Gửi 10 events liên tiếp → xem analytics/summary</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runBatch(this)">▶ Run ×10</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ SYNC GRPC ═══════════ -->
+<div id="ep-sync-grpc" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/sync-grpc</div>
+    <div class="endpoint-desc">Gọi inventory-service qua gRPC (HTTP/2 + Protobuf binary) thay vì REST. Response có thêm field <code>protocol: "gRPC"</code>.</div>
+    <div class="concept-box"><div class="title">Tại sao gRPC nhỏ hơn REST?</div>
+REST: <code>{"productId":"IPHONE-15","quantity":1}</code> → ~215 bytes text<br>
+gRPC: Protobuf binary → ~30 bytes<br>
+Nhỏ hơn ~85%, không cần parse JSON, IDE biết type ngay lúc viết code.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Thành công</span><span class="s-name">Còn hàng — response có protocol:gRPC</span></div>
+            <div class="scenario-body">
+                <div class="param-row"><label>productId</label><input id="grpc-pid" value="IPHONE-15"/></div>
+                <div class="param-row"><label>quantity</label><input id="grpc-qty" value="1" type="number"/></div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-grpc',{productId:v('grpc-pid'),quantity:+v('grpc-qty')})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ Hết hàng</span><span class="s-name">qty=999 → 400</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-grpc',{productId:'IPHONE-15',quantity:999})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ NOT_FOUND</span><span class="s-name">INVALID-SKU → gRPC status 5 → HTTP 404</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/sync-grpc',{productId:'INVALID-SKU',quantity:1})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ KAFKA SAGA ═══════════ -->
+<div id="ep-kafka-saga" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge post">POST</span> /orders/kafka-saga</div>
+    <div class="endpoint-desc">Choreography SAGA qua Kafka — 3 service phối hợp không gọi nhau trực tiếp.</div>
+    <div class="concept-box"><div class="title">Luồng SAGA</div>
+order-service → <code>[order-events]</code> → inventory (reserve)<br>
+→ <code>[inventory-events]</code> → payment (charge)<br>
+→ <code>[payment-events]</code> → inventory (confirm / rollback)<br><br>
+Mở <strong>Dashboard tab Kafka SAGA</strong> để thấy animation packet.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge success">✓ Happy path</span><span class="s-name">Đặt hàng → reserve → payment OK → confirm sale</span></div>
+            <div class="scenario-body">
+                <div class="param-row">
+                    <label>productId</label>
+                    <select id="ks-pid">
+                        <option>IPHONE-15</option>
+                        <option>MACBOOK-M3</option>
+                        <option>LAPTOP-MODULAR-TEST</option>
+                    </select>
+                </div>
+                <div class="param-row"><label>quantity</label><input id="ks-qty" value="1" type="number"/></div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/kafka-saga',{productId:v('ks-pid'),quantity:+v('ks-qty')})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge fail">✗ Out of stock</span><span class="s-name">FAKE-SKU → inventory.failed → SAGA dừng</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runPost(this,'/api/orders/kafka-saga',{productId:'FAKE-SKU',quantity:1})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+        <div class="scenario">
+            <div class="scenario-header" onclick="toggleScenario(this)"><span class="s-badge warn">↩ SAGA Rollback</span><span class="s-name">FAIL-PAYMENT → reserve OK → payment fail → rollback</span></div>
+            <div class="scenario-body">
+                <div class="concept-box" style="margin:8px 0 6px">Kịch bản quan trọng nhất — compensating transaction. Sau khi chạy, xem DB: <code>reserved phải về 0</code>.</div>
+                <button class="run-btn" onclick="runPost(this,'/api/orders/kafka-saga',{productId:'FAIL-PAYMENT',quantity:1})">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ ANALYTICS SUMMARY ═══════════ -->
+<div id="ep-analytics-summary" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /analytics/summary</div>
+    <div class="endpoint-desc">Thống kê tổng hợp từ analytics-service — consumer group riêng đọc <code>user-behavior-logs</code> Kafka topic.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge info">ℹ Summary</span><span class="s-name">Top products + hourly distribution</span></div>
+            <div class="scenario-body">
+                <button class="run-btn" onclick="runGet(this,'/api/analytics/summary')">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ ANALYTICS PRODUCT ═══════════ -->
+<div id="ep-analytics-product" class="ep" style="display:none">
+    <div class="endpoint-title"><span class="badge get">GET</span> /analytics/products/:productId</div>
+    <div class="endpoint-desc">Thống kê chi tiết theo từng sản phẩm.</div>
+    <div class="scenarios">
+        <div class="scenario open">
+            <div class="scenario-header"><span class="s-badge info">ℹ Product stats</span><span class="s-name">Xem stats của sản phẩm</span></div>
+            <div class="scenario-body">
+                <div class="param-row">
+                    <label>productId</label>
+                    <select id="ap-pid">
+                        <option>IPHONE-15</option>
+                        <option>MACBOOK-M3</option>
+                        <option>LAPTOP-MODULAR-TEST</option>
+                    </select>
+                </div>
+                <button class="run-btn" onclick="runGet(this,'/api/analytics/products/'+v('ap-pid'))">▶ Run</button>
+                <div class="res-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+</div><!-- /endpoint-panel -->
+
+<!-- ── Bottom log panel ── -->
+<div class="result-panel">
+    <div class="rp-header">
+        <span>REQUEST LOG</span>
+        <button onclick="clearLog()">Clear</button>
+    </div>
+    <div id="log-stream"></div>
+</div>
+</div><!-- /main -->
+</div><!-- /layout -->
+
+<script>
+// ── Helpers ──────────────────────────────────────────────────────────────
+function v(id) { return document.getElementById(id)?.value || ''; }
+
+function show(id) {
+    document.querySelectorAll('.ep').forEach(e => e.style.display = 'none');
+    document.querySelectorAll('.nav-item').forEach(e => e.classList.remove('active'));
+    const el = document.getElementById('ep-' + id);
+    if (el) el.style.display = 'block';
+    const found = [...document.querySelectorAll('.nav-item')].find(n => n.getAttribute('onclick')?.includes("'" + id + "'"));
+    if (found) found.classList.add('active');
+}
+
+function toggleScenario(hdr) {
+    hdr.closest('.scenario').classList.toggle('open');
+}
+
+function clearLog() { document.getElementById('log-stream').innerHTML = ''; }
+
+// ── Syntax highlight JSON ─────────────────────────────────────────────────
+function highlight(obj) {
+    const s = JSON.stringify(obj, null, 2);
+    return s
+        .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (m) => {
+            if (/^"/.test(m)) {
+                if (/:$/.test(m)) return `<span class="key">${m}</span>`;
+                return `<span class="str">${m}</span>`;
+            }
+            if (/true|false/.test(m)) return `<span class="bool">${m}</span>`;
+            return `<span class="num">${m}</span>`;
+        });
+}
+
+// ── Request runner ────────────────────────────────────────────────────────
+function addLog(method, url, status, latency) {
+    const log = document.getElementById('log-stream');
+    const ts  = new Date().toLocaleTimeString('vi', { hour12: false });
+    const ok  = status >= 200 && status < 300;
+    const row = document.createElement('div');
+    row.className = 'log-entry';
+    row.innerHTML =
+        `<span class="log-ts">${ts}</span>` +
+        `<span class="log-method ${method}">${method}</span>` +
+        `<span class="log-url">${url}</span>` +
+        `<span class="log-code ${ok?'ok':'err'}">${status}</span>` +
+        `<span class="log-latency">${latency}ms</span>`;
+    log.prepend(row);
+}
+
+function showResult(btn, status, data, latency) {
+    const box = btn.nextElementSibling;
+    box.classList.add('show');
+    const ok = status >= 200 && status < 300;
+    box.innerHTML =
+        `<div class="res-header">` +
+        `<span class="res-status ${ok?'ok':'err'}">${status}</span>` +
+        `<span class="res-latency">${latency}ms</span>` +
+        `</div>` +
+        `<div class="res-body">${highlight(data)}</div>`;
+}
+
+async function runGet(btn, url) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Running...';
+    const t0 = Date.now();
+    try {
+        const res  = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        const lat  = Date.now() - t0;
+        showResult(btn, res.status, data, lat);
+        addLog('GET', url, res.status, lat);
+    } catch (e) {
+        showResult(btn, 503, { error: e.message }, Date.now() - t0);
+        addLog('GET', url, 503, Date.now() - t0);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '▶ Run';
+    }
+}
+
+async function runPost(btn, url, body) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Running...';
+    const t0 = Date.now();
+    try {
+        const res  = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        const data = await res.json().catch(() => ({}));
+        const lat  = Date.now() - t0;
+        showResult(btn, res.status, data, lat);
+        addLog('POST', url + ' ' + JSON.stringify(body), res.status, lat);
+    } catch (e) {
+        showResult(btn, 503, { error: e.message }, Date.now() - t0);
+        addLog('POST', url, 503, Date.now() - t0);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = btn.textContent.includes('×10') ? '▶ Run ×10' : '▶ Run';
+    }
+}
+
+const products = ['IPHONE-15','MACBOOK-M3','LAPTOP-MODULAR-TEST','IPHONE-15','IPHONE-15'];
+async function runBatch(btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Sending 10...';
+    const url = '/api/orders/stream';
+    for (let i = 0; i < 10; i++) {
+        const pid = products[i % products.length];
+        try {
+            const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({productId:pid,quantity:1}) });
+            addLog('POST', url + ' '+pid, res.status, 0);
+        } catch {}
+        await new Promise(r => setTimeout(r, 150));
+    }
+    btn.textContent = '✓ Sent 10 — check /analytics/summary';
+    btn.disabled = false;
+    // Show summary
+    const box = btn.nextElementSibling;
+    try {
+        const res  = await fetch('/api/analytics/summary');
+        const data = await res.json();
+        box.classList.add('show');
+        box.innerHTML = `<div class="res-header"><span class="res-status ok">200</span><span class="res-latency">analytics/summary</span></div><div class="res-body">${highlight(data)}</div>`;
+    } catch {}
+}
+</script>
+</body>
+</html>

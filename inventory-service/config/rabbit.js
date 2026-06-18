@@ -70,6 +70,21 @@ async function connectRabbit() {
         await channel.bindQueue(SAGA_ROLLBACK_QUEUE, SAGA_EXCHANGE, '');
         logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Queue bound ${SAGA_ROLLBACK_QUEUE} ok.` });
 
+        // --- SETUP CHO LUỒNG PUBLISH SAU RESERVE (→ payment-service) ---
+        // inventory-service publish vào đây sau khi reserve thành công
+        // payment-service consume từ 'payment_order_reserved_queue' (bind vào exchange này)
+        await channel.assertExchange('inventory_events', 'fanout', { durable: false });
+        logger.info({ trace_id: 'SYSTEM', message: 'RabbitMQ: Exchange inventory_events ready.' });
+
+        // --- SETUP CHO CONFIRM SALE (payment thành công → trừ stock thật) ---
+        // payment-service publish vào 'payment_completed_events' sau khi charge thành công
+        // inventory-service consume ở đây để gọi confirmSale()
+        await channel.assertExchange('payment_completed_events', 'fanout', { durable: false });
+        const PAYMENT_COMPLETED_QUEUE = 'inventory_payment_completed_queue';
+        await channel.assertQueue(PAYMENT_COMPLETED_QUEUE, { durable: true });
+        await channel.bindQueue(PAYMENT_COMPLETED_QUEUE, 'payment_completed_events', '');
+        logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Queue bound ${PAYMENT_COMPLETED_QUEUE} ok.` });
+
         logger.info({ trace_id: 'SYSTEM', message: 'RabbitMQ infrastructure ready (inventory config).' });
         return channel;
     } catch (error) {

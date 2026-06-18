@@ -47,6 +47,59 @@ app.get('/api/circuit-status', async (req, res) => {
     }
 });
 
+// ── Proxy: health endpoints ───────────────────────────────────────────────
+app.get('/api/health/order', async (req, res) => {
+    try {
+        const upstream = await fetch('http://localhost:3001/health');
+        const data = await upstream.json().catch(() => ({}));
+        res.status(upstream.status).json(data);
+    } catch (err) {
+        res.status(503).json({ error: err.message });
+    }
+});
+
+app.get('/api/health/inventory', async (req, res) => {
+    try {
+        const upstream = await fetch('http://localhost:3002/health');
+        const data = await upstream.json().catch(() => ({}));
+        res.status(upstream.status).json(data);
+    } catch (err) {
+        res.status(503).json({ error: err.message });
+    }
+});
+
+// ── Proxy: inventory-service ──────────────────────────────────────────────
+app.get('/api/inventory/:productId', async (req, res) => {
+    try {
+        const upstream = await fetch(`http://localhost:3002/inventory/${req.params.productId}`);
+        const data = await upstream.json().catch(() => ({}));
+        res.status(upstream.status).json(data);
+    } catch (err) {
+        res.status(503).json({ error: err.message });
+    }
+});
+
+// ── Proxy: analytics-service ──────────────────────────────────────────────
+app.get('/api/analytics/summary', async (req, res) => {
+    try {
+        const upstream = await fetch('http://localhost:3005/analytics/summary');
+        const data = await upstream.json().catch(() => ({}));
+        res.status(upstream.status).json(data);
+    } catch (err) {
+        res.status(503).json({ error: err.message });
+    }
+});
+
+app.get('/api/analytics/products/:productId', async (req, res) => {
+    try {
+        const upstream = await fetch(`http://localhost:3005/analytics/products/${req.params.productId}`);
+        const data = await upstream.json().catch(() => ({}));
+        res.status(upstream.status).json(data);
+    } catch (err) {
+        res.status(503).json({ error: err.message });
+    }
+});
+
 // ── SSE client registry ───────────────────────────────────────────────────
 const clients = new Set();
 
@@ -126,9 +179,11 @@ async function startRabbitObserver() {
         const ch   = await conn.createChannel();
 
         const targets = [
-            ['order_events',     'fanout', false, 'rmq.order.created'],
-            ['order_events_dlx', 'fanout', true,  'rmq.order.dlq'    ],
-            ['saga_events',      'fanout', false, 'rmq.saga.rollback' ],
+            ['order_events',             'fanout', false, 'rmq.order.created'       ],
+            ['order_events_dlx',         'fanout', true,  'rmq.order.dlq'           ],
+            ['inventory_events',         'fanout', false, 'rmq.inventory.reserved'  ],
+            ['payment_completed_events', 'fanout', false, 'rmq.payment.completed'   ],
+            ['saga_events',              'fanout', false, 'rmq.saga.rollback'       ],
         ];
 
         for (const [name, type, durable, eventType] of targets) {
@@ -148,7 +203,7 @@ async function startRabbitObserver() {
             }, { noAck: false });
         }
 
-        console.log('[UI] RabbitMQ observer ready (order_events, order_events_dlx, saga_events)');
+        console.log('[UI] RabbitMQ observer ready (order_events, order_events_dlx, inventory_events, payment_completed_events, saga_events)');
     } catch (err) {
         console.warn('[UI] RabbitMQ observer skipped: ' + err.message);
     }

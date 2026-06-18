@@ -3,6 +3,7 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const logger = require('./config/logger');
 const { connectKafka, getKafkaProducer, getKafkaConsumer } = require('./config/kafka');
+const { connectRabbit, getRabbitChannel } = require('./config/rabbit');
 
 const app = express();
 const PORT = 3003;
@@ -121,6 +122,71 @@ async function startInventoryEventsConsumer() {
 }
 
 // =========================================================================
+// RABBITMQ CONSUMER — RabbitMQ SAGA flow (song song với Kafka SAGA)
+//
+// Luồng:
+//   inventory-service publish "inventory.reserved" → inventory_events (fanout)
+//   [file này] consume payment_order_reserved_queue → xử lý thanh toán
+//     success → publish payment_completed_events → inventory confirm sale
+//     fail    → publish saga_events              → inventory rollback
+//
+// Test: POST /orders/async {"productId":"FAIL-PAYMENT","quantity":1}
+// =========================================================================
+async function startRabbitPaymentConsumer() {
+    const channel = getRabbitChannel();
+    if (!channel) return;
+
+    const QUEUE = 'payment_order_reserved_queue';
+    logger.info({ trace_id: 'SYSTEM', message: `RabbitMQ: Consumer 'inventory.reserved' is listening on ${QUEUE}...` });
+
+    channel.consume(QUEUE, async (msg) => {
+        if (!msg) return;
+
+        const traceId = msg.properties.headers['x-trace-id'] || 'SYSTEM-RMQ-PMT';
+        const { type, orderId, productId, quantity } = JSON.parse(msg.content.toString());
+
+        if (type !== 'inventory.reserved') {
+            channel.ack(msg);
+            return;
+        }
+
+        logger.info({
+            trace_id: traceId,
+            message: `[RabbitMQ SAGA] Processing payment for orderId=${orderId}, productId=${productId}...`,
+        });
+
+        // Mock payment — FAIL-PAYMENT luôn bị từ chối
+        const isSuccess = productId !== 'FAIL-PAYMENT';
+        await new Promise(r => setTimeout(r, 300));
+
+        if (isSuccess) {
+            const amount = Math.floor(Math.random() * 5000000) + 100000;
+            logger.info({
+                trace_id: traceId,
+                message: `[RabbitMQ SAGA] Payment SUCCESS — orderId=${orderId}, amount=${amount.toLocaleString('vi-VN')} VND`,
+            });
+            channel.publish(
+                'payment_completed_events', '',
+                Buffer.from(JSON.stringify({ type: 'payment.completed', orderId, productId, quantity, traceId, amount, completedAt: new Date().toISOString() })),
+                { headers: { 'x-trace-id': traceId } }
+            );
+        } else {
+            logger.error({
+                trace_id: traceId,
+                message: `[RabbitMQ SAGA] Payment FAILED — card declined for orderId=${orderId}. SAGA rollback triggered.`,
+            });
+            channel.publish(
+                'saga_events', '',
+                Buffer.from(JSON.stringify({ type: 'payment.failed', orderId, productId, quantity, traceId, reason: 'card_declined', failedAt: new Date().toISOString() })),
+                { headers: { 'x-trace-id': traceId } }
+            );
+        }
+
+        channel.ack(msg);
+    });
+}
+
+// =========================================================================
 // STARTUP — kết nối Kafka trước, chỉ mở port khi sẵn sàng
 // =========================================================================
 async function start() {
@@ -129,6 +195,9 @@ async function start() {
 
         await connectKafka();
         await startInventoryEventsConsumer();
+
+        await connectRabbit();
+        await startRabbitPaymentConsumer();
 
         app.listen(PORT, () => {
             logger.info({

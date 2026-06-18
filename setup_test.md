@@ -205,7 +205,7 @@ curl -X POST http://localhost:3001/orders/sync-grpc \
 
 ---
 
-### TEST 4 — RabbitMQ Async
+### TEST 4 — RabbitMQ Async (fire-and-forget cơ bản)
 
 **Mục đích bài học**: Fire-and-forget pattern — order-service không chờ inventory xử lý xong.
 
@@ -226,6 +226,96 @@ curl -X POST http://localhost:3001/orders/async \
 - RabbitMQ async: client nhận `202` ngay (~2ms) → inventory xử lý sau
 
 **Hạn chế**: Client không biết order cuối cùng success hay fail (cần polling hoặc webhook).
+
+---
+
+### TEST 4b — RabbitMQ SAGA (full flow qua payment-service)
+
+**Mục đích bài học**: SAGA pattern hoàn chỉnh qua RabbitMQ — so sánh trực tiếp với Kafka SAGA (Test 5).
+
+```
+POST /orders/async
+  → order_events (fanout)
+  → inventory-service: reserve → publish inventory_events
+  → payment-service: charge →
+       success → publish payment_completed_events → inventory confirmSale()
+       fail    → publish saga_events              → inventory releaseReserve()
+```
+
+#### 4b-1. Happy path — reserve → payment OK → confirm sale
+
+```bash
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"IPHONE-15","quantity":1}'
+```
+
+**Luồng log mong đợi** (theo thứ tự thời gian):
+```
+inventory-service: [RabbitMQ Async] RESERVE success. Stock remaining: 9
+payment-service:   [RabbitMQ SAGA] Processing payment for orderId=..., productId=IPHONE-15
+payment-service:   [RabbitMQ SAGA] Payment SUCCESS — orderId=... amount=... VND
+inventory-service: [RabbitMQ SAGA] CONFIRM SALE — stock deducted for orderId=..., product=IPHONE-15
+```
+
+**Kiểm tra DB** — stock thật phải giảm 1:
+```bash
+docker exec local_postgres psql -U inventory_user -d inventory_db \
+  -c "SELECT product_id, stock, reserved FROM inventory WHERE product_id='IPHONE-15';"
+# stock = 9, reserved = 0
+```
+
+#### 4b-2. Out of stock → DLQ, payment-service không nhận
+
+```bash
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"IPHONE-15","quantity":999}'
+```
+
+**Luồng log**:
+```
+inventory-service: [RabbitMQ Async] RESERVE failed — out_of_stock
+inventory-service: [DLQ] Message failed - routed to Dead Letter Queue
+```
+
+Payment-service **không nhận được gì** vì inventory không publish `inventory_events` khi reserve fail.
+
+Verify trên RabbitMQ UI: Queues → `inventory_order_failed_queue` → Get messages → thấy `x-death` header.
+
+#### 4b-3. SAGA Rollback — payment từ chối
+
+```bash
+curl -X POST http://localhost:3001/orders/async \
+  -H "Content-Type: application/json" \
+  -d '{"productId":"FAIL-PAYMENT","quantity":1}'
+```
+
+**Luồng log**:
+```
+inventory-service: [RabbitMQ Async] RESERVE success. Stock remaining: 98
+payment-service:   [RabbitMQ SAGA] Processing payment for orderId=..., productId=FAIL-PAYMENT
+payment-service:   [RabbitMQ SAGA] Payment FAILED — card declined. SAGA rollback triggered.
+inventory-service: [SAGA] ROLLBACK success — stock released for FAIL-PAYMENT
+```
+
+**Kiểm tra DB** — reserved phải về 0 sau rollback:
+```bash
+docker exec local_postgres psql -U inventory_user -d inventory_db \
+  -c "SELECT product_id, stock, reserved FROM inventory WHERE product_id='FAIL-PAYMENT';"
+# reserved = 0
+```
+
+**So sánh RabbitMQ SAGA vs Kafka SAGA:**
+
+| | RabbitMQ SAGA | Kafka SAGA |
+|---|---|---|
+| Route trigger | `POST /orders/async` | `POST /orders/kafka-saga` |
+| Message broker | fanout exchanges | topics |
+| Replay khi restart | ❌ (message mất nếu chưa ack) | ✅ (offset giữ nguyên) |
+| Message order | Không đảm bảo | Đảm bảo trong 1 partition |
+| Dead letter | ✅ DLX/DLQ có sẵn | ❌ phải tự xử lý |
+| Khi nào dùng | Task queue, cần DLQ | Event sourcing, cần replay |
 
 ---
 
