@@ -1,0 +1,13 @@
+{
+  "name": "chat-service",
+  "version": "1.0.0",
+  "description": "WebSocket / Socket.IO — bidirectional realtime + Kafka bridge",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^5.2.1",
+    "kafkajs": "^2.2.4",
+    "socket.io": "^4.8.1",
+    "winston": "^3.17.0",
+    "winston-loki": "^6.1.3"
+  }
+}

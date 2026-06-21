@@ -61,6 +61,28 @@ services:
   # 4. PostgreSQL — Database của inventory-service
   #    Mỗi service sở hữu DB riêng (Database per Service pattern)
   #    Không service nào khác được kết nối trực tiếp vào DB này
+  # 5. Microsoft SQL Server 2022 — học về RDBMS enterprise và query optimization
+  #    Port: 1433 (mặc định của SQL Server)
+  #    Tool kết nối: Azure Data Studio, DBeaver, hoặc sqlcmd
+  #    Connection string: Server=localhost,1433;Database=learning_db;User=sa;Password=YourStr0ng!Pass
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: local_sqlserver
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStr0ng!Pass"
+      MSSQL_PID: "Developer"       # bản Developer — miễn phí, đầy đủ tính năng Enterprise
+    volumes:
+      - sqlserver_data:/var/opt/mssql  # persist data giữa các lần restart
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'YourStr0ng!Pass' -Q 'SELECT 1' -No -C || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s             # SQL Server khởi động chậm hơn Postgres
+
   postgres:
     image: postgres:16-alpine
     container_name: local_postgres
@@ -77,3 +99,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+volumes:
+  sqlserver_data:

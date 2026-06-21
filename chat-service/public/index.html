@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebSocket Demo — chat-service :3006</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Consolas', 'Monaco', monospace;
+      background: #0d1117;
+      color: #e6edf3;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 15px; color: #58a6ff; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #21262d;
+      border: 1px solid #30363d;
+    }
+    .badge.connected { border-color: #238636; color: #3fb950; }
+    .badge.disconnected { border-color: #da3633; color: #f85149; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      flex: 1;
+      overflow: hidden;
+      gap: 0;
+    }
+
+    /* ── Panel chung ── */
+    .panel {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #30363d;
+      overflow: hidden;
+    }
+    .panel:last-child { border-right: none; }
+    .panel-header {
+      background: #161b22;
+      padding: 10px 16px;
+      font-size: 12px;
+      color: #8b949e;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-header strong { color: #e6edf3; font-size: 13px; }
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .panel-footer {
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* ── Notification feed (left panel) ── */
+    .notif {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      animation: fadeIn 0.2s ease;
+    }
+    .notif .notif-type {
+      font-size: 11px;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    .notif.order-created   .notif-type { color: #58a6ff; }
+    .notif.order-created              { border-color: #1f6feb; }
+    .notif.inventory-reserved .notif-type { color: #3fb950; }
+    .notif.inventory-reserved          { border-color: #238636; }
+    .notif.inventory-failed .notif-type { color: #f85149; }
+    .notif.inventory-failed            { border-color: #da3633; }
+    .notif.payment-completed .notif-type { color: #a371f7; }
+    .notif.payment-completed            { border-color: #8957e5; }
+    .notif.payment-failed .notif-type { color: #f0883e; }
+    .notif.payment-failed            { border-color: #bd561d; }
+    .notif .notif-meta {
+      color: #6e7681;
+      font-size: 10px;
+      margin-top: 4px;
+    }
+    .notif .ack-btn {
+      margin-top: 6px;
+      font-size: 11px;
+      padding: 2px 8px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #8b949e;
+      cursor: pointer;
+    }
+    .notif .ack-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    .notif .ack-btn.acked { border-color: #238636; color: #3fb950; cursor: default; }
+
+    /* ── Chat panel (right) ── */
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      animation: fadeIn 0.15s ease;
+    }
+    .msg.system .msg-text {
+      color: #8b949e;
+      font-size: 11px;
+      font-style: italic;
+      text-align: center;
+    }
+    .msg .msg-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .msg .msg-username { font-size: 11px; font-weight: bold; color: #58a6ff; }
+    .msg .msg-username.me { color: #3fb950; }
+    .msg .msg-time { font-size: 10px; color: #6e7681; }
+    .msg .msg-text {
+      font-size: 13px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 6px 10px;
+      line-height: 1.4;
+    }
+    .msg.own .msg-text {
+      background: #1f3a1f;
+      border-color: #238636;
+    }
+
+    #typing-indicator {
+      font-size: 11px;
+      color: #8b949e;
+      font-style: italic;
+      min-height: 16px;
+      padding: 0 2px;
+    }
+
+    /* ── Form controls ── */
+    .form-row {
+      display: flex;
+      gap: 6px;
+    }
+    input[type="text"] {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #58a6ff; }
+    button {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { border-color: #58a6ff; color: #58a6ff; }
+    button.primary {
+      background: #1f6feb;
+      border-color: #388bfd;
+      color: #ffffff;
+    }
+    button.primary:hover { background: #388bfd; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .info-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #8b949e;
+      line-height: 1.6;
+    }
+    .info-box span { color: #58a6ff; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6e7681;
+      font-size: 12px;
+      flex-direction: column;
+      gap: 6px;
+      text-align: center;
+    }
+    .count-badge {
+      background: #1f6feb;
+      color: #fff;
+      border-radius: 10px;
+      padding: 1px 6px;
+      font-size: 10px;
+      min-width: 18px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>WebSocket / Socket.IO Demo — chat-service :3006</h1>
+  <span class="badge disconnected" id="admin-status">admin: disconnected</span>
+  <span class="badge disconnected" id="chat-status">chat: disconnected</span>
+  <span style="margin-left:auto; font-size:11px; color:#6e7681;">
+    So sánh: SSE (ui-service :3004) = one-way | WS (service này) = two-way
+  </span>
+</header>
+
+<div class="layout">
+
+  <!-- ── LEFT: Kafka Notification Feed (admin namespace) ── -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <strong>/admin namespace</strong>
+        <span style="margin-left:8px;">Kafka → Socket.IO bridge</span>
+      </div>
+      <span class="count-badge" id="notif-count">0</span>
+    </div>
+
+    <div class="panel-body" id="notif-feed">
+      <div class="empty-state">
+        <div>Đang chờ Kafka events...</div>
+        <div style="font-size:10px;">
+          Gửi order: POST http://localhost:3001/orders/kafka-saga<br/>
+          <code>{"productId":"IPHONE-15","quantity":1}</code>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-footer">
+      <div class="form-row">
+        <button class="primary" id="sim-btn" onclick="simulateSaga()" style="flex:1;">▶ Chạy Saga Demo (không cần Kafka)</button>
+        <button onclick="document.getElementById('notif-feed').innerHTML=''; notifCount=0; document.getElementById('notif-count').textContent=0;" title="Xoá feed">🗑</button>
+      </div>
+      <div class="info-box">
+        <span>Bidirectional demo:</span> Nhấn "ACK" trên mỗi event → browser gửi ngược lên server.<br/>
+        Với SSE: không thể — SSE chỉ nhận, không gửi được qua cùng connection.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Chat Room (/chat namespace) ── -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <strong>/chat namespace</strong>
+        <span style="margin-left:8px;">Bidirectional live chat</span>
+      </div>
+      <span id="room-member-count" style="font-size:11px;"></span>
+    </div>
+
+    <div class="panel-body" id="chat-messages">
+      <div class="empty-state" id="chat-empty">
+        <div>Chưa join room</div>
+        <div style="font-size:10px;">Điền username và room ID bên dưới để bắt đầu</div>
+      </div>
+    </div>
+
+    <div id="typing-indicator"></div>
+
+    <div class="panel-footer">
+      <div class="info-box" id="chat-info-box">
+        <span>Typing indicator:</span> Chỉ làm được với WebSocket.<br/>
+        Mở tab thứ 2 → join cùng room → gõ text → tab kia thấy "đang gõ..."
+      </div>
+
+      <!-- Join form -->
+      <div class="form-row" id="join-form">
+        <input type="text" id="username-input" placeholder="Username (vd: khach, agent)" maxlength="30" />
+        <input type="text" id="room-input" placeholder="Room ID (vd: support-001)" value="support-001" maxlength="50" />
+        <button class="primary" onclick="joinRoom()">Join</button>
+        <button onclick="quickJoin()" title="Join nhanh với tên ngẫu nhiên">⚡</button>
+      </div>
+
+      <!-- Message form (ẩn cho đến khi join) -->
+      <div class="form-row" id="msg-form" style="display:none;">
+        <input
+          type="text"
+          id="msg-input"
+          placeholder="Nhập tin nhắn..."
+          maxlength="500"
+          oninput="onTyping()"
+          onkeydown="if(event.key==='Enter') sendMessage()"
+        />
+        <button class="primary" onclick="sendMessage()">Gửi</button>
+        <button onclick="leaveRoom()">Rời</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────
+// Socket.IO — /admin namespace
+// Kết nối tới ws://localhost:3006/admin
+// ─────────────────────────────────────────────────────────────────────────
+const adminSocket = io('/admin');
+let notifCount = 0;
+
+// Auto-fill username ngẫu nhiên để dễ demo
+const names = ['khach_01', 'agent_A', 'user_B', 'support', 'demo'];
+document.getElementById('username-input').value = names[Math.floor(Math.random() * names.length)];
+
+adminSocket.on('connect', () => {
+  document.getElementById('admin-status').textContent = 'admin: connected';
+  document.getElementById('admin-status').className = 'badge connected';
+});
+
+adminSocket.on('disconnect', () => {
+  document.getElementById('admin-status').textContent = 'admin: disconnected';
+  document.getElementById('admin-status').className = 'badge disconnected';
+});
+
+// Nhận lịch sử khi mới connect
+adminSocket.on('notifications:history', (events) => {
+  events.forEach(renderNotification);
+});
+
+// Nhận event real-time từ Kafka bridge
+adminSocket.on('notification', (event) => {
+  renderNotification(event);
+});
+
+function renderNotification(event) {
+  const feed = document.getElementById('notif-feed');
+
+  // Xóa empty state nếu còn
+  const empty = feed.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  notifCount++;
+  document.getElementById('notif-count').textContent = notifCount;
+
+  const typeClass = (event.type || '').replace('.', '-');
+  const div = document.createElement('div');
+  div.className = `notif ${typeClass}`;
+  div.dataset.id = event.id;
+  div.innerHTML = `
+    <div class="notif-type">${event.type || event.topic}</div>
+    <div>${event.orderId ? `orderId: ${event.orderId.slice(0,8)}...` : ''}
+         ${event.productId ? ` | product: ${event.productId}` : ''}
+         ${event.quantity  ? ` | qty: ${event.quantity}` : ''}</div>
+    <div class="notif-meta">${event.topic} · ${new Date(event.receivedAt).toLocaleTimeString()}</div>
+    <button class="ack-btn" onclick="ackEvent('${event.id}', this)">ACK ↑ gửi về server</button>
+  `;
+
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+// ACK — bidirectional: browser gửi ngược lên server
+// Đây là feature không làm được với SSE thuần
+function ackEvent(id, btn) {
+  adminSocket.emit('notification:ack', { id, action: 'acknowledge' });
+  btn.textContent = '✓ Acknowledged';
+  btn.className = 'ack-btn acked';
+  btn.disabled = true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Socket.IO — /chat namespace
+// ─────────────────────────────────────────────────────────────────────────
+const chatSocket = io('/chat');
+let myUsername = '';
+let myRoom = '';
+let typingTimer = null;
+let isTyping = false;
+
+chatSocket.on('connect', () => {
+  document.getElementById('chat-status').textContent = 'chat: connected';
+  document.getElementById('chat-status').className = 'badge connected';
+});
+
+chatSocket.on('disconnect', () => {
+  document.getElementById('chat-status').textContent = 'chat: disconnected';
+  document.getElementById('chat-status').className = 'badge disconnected';
+});
+
+// Có người join room
+chatSocket.on('user:joined', ({ username, memberCount }) => {
+  addSystemMsg(`${username} đã vào room`);
+  document.getElementById('room-member-count').textContent = `${memberCount} người`;
+});
+
+// Có người rời room
+chatSocket.on('user:left', ({ username }) => {
+  addSystemMsg(`${username} đã rời room`);
+});
+
+// Nhận tin nhắn
+chatSocket.on('message', (msg) => {
+  addChatMsg(msg);
+});
+
+// Typing indicator — WebSocket bidirectional
+// Tab 2 gõ → tab 1 thấy "X đang gõ..."
+// Không thể replicate với SSE vì tab 2 cần GỬI "tôi đang gõ" lên server
+chatSocket.on('typing', ({ username, isTyping }) => {
+  const el = document.getElementById('typing-indicator');
+  el.textContent = isTyping ? `${username} đang gõ...` : '';
+});
+
+function joinRoom() {
+  const username = document.getElementById('username-input').value.trim();
+  const roomId   = document.getElementById('room-input').value.trim();
+
+  if (!username || !roomId) {
+    alert('Điền username và room ID');
+    return;
+  }
+
+  myUsername = username;
+  myRoom = roomId;
+
+  chatSocket.emit('join', { username, roomId });
+
+  // Switch UI
+  document.getElementById('join-form').style.display = 'none';
+  document.getElementById('msg-form').style.display = 'flex';
+  document.getElementById('chat-info-box').style.display = 'none';
+  document.getElementById('chat-empty').style.display = 'none';
+  document.getElementById('msg-input').focus();
+}
+
+function leaveRoom() {
+  chatSocket.disconnect();
+  chatSocket.connect();
+  myUsername = '';
+  myRoom = '';
+  document.getElementById('join-form').style.display = 'flex';
+  document.getElementById('msg-form').style.display = 'none';
+  document.getElementById('chat-info-box').style.display = 'block';
+  document.getElementById('room-member-count').textContent = '';
+}
+
+function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const text  = input.value.trim();
+  if (!text) return;
+
+  chatSocket.emit('message', { text });
+  input.value = '';
+
+  // Dừng typing indicator khi gửi
+  if (isTyping) {
+    chatSocket.emit('typing', { isTyping: false });
+    isTyping = false;
+  }
+}
+
+// Gửi typing event khi người dùng gõ
+// Server relay tới các client khác (socket.to(room).emit)
+function onTyping() {
+  if (!isTyping) {
+    isTyping = true;
+    chatSocket.emit('typing', { isTyping: true });
+  }
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => {
+    isTyping = false;
+    chatSocket.emit('typing', { isTyping: false });
+  }, 1500); // dừng gõ 1.5s → hết "đang gõ"
+}
+
+function addChatMsg(msg) {
+  const feed = document.getElementById('chat-messages');
+  const isOwn = msg.username === myUsername;
+
+  const div = document.createElement('div');
+  div.className = `msg${isOwn ? ' own' : ''}`;
+  div.innerHTML = `
+    <div class="msg-header">
+      <span class="msg-username${isOwn ? ' me' : ''}">${msg.username}</span>
+      <span class="msg-time">${new Date(msg.timestamp).toLocaleTimeString()}</span>
+    </div>
+    <div class="msg-text">${escapeHtml(msg.text)}</div>
+  `;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function addSystemMsg(text) {
+  const feed = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'msg system';
+  div.innerHTML = `<div class="msg-text">${escapeHtml(text)}</div>`;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── Demo helpers ──────────────────────────────────────────────────────────
+
+// Gọi POST /demo/events → server push 4 event vào /admin namespace
+// Không cần Kafka đang chạy — dùng để demo luồng order saga
+async function simulateSaga() {
+  const btn = document.getElementById('sim-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Đang chạy...';
+
+  try {
+    const res = await fetch('/demo/events', { method: 'POST' });
+    const data = await res.json();
+    btn.textContent = `✓ ${data.orderId} · ${data.productId} ×${data.quantity}`;
+    setTimeout(() => {
+      btn.textContent = '▶ Chạy Saga Demo (không cần Kafka)';
+      btn.disabled = false;
+    }, 3000);
+  } catch (err) {
+    btn.textContent = '✗ Lỗi — chat-service có chạy không?';
+    btn.disabled = false;
+  }
+}
+
+// Join nhanh với tên ngẫu nhiên — tiện khi mở nhiều tab để test
+function quickJoin() {
+  const names = ['khach', 'agent', 'user_B', 'support', 'demo_user'];
+  const pick = names[Math.floor(Math.random() * names.length)] + '_' + Math.floor(Math.random()*90+10);
+  document.getElementById('username-input').value = pick;
+  joinRoom();
+}
+</script>
+</body>
+</html>
